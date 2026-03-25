@@ -1,0 +1,40 @@
+---
+- name: Construire la liste de sous-réseaux autorisés
+  ansible.builtin.set_fact:
+    lm_networks_csv: "{{ (node_live_migration.networks | default([])) | join(',') }}"
+
+- name: Configurer la Live Migration Hyper-V sur le noeud
+  ansible.windows.win_shell: |
+    $before = Get-VMHost
+
+    $targetEnabled = [System.Convert]::ToBoolean("{{ node_live_migration.enabled | bool }}")
+    $targetProtocol = "{{ node_live_migration.auth_protocol }}"
+    $targetPerf = "{{ node_live_migration.performance_option }}"
+    $targetMax = [int]{{ node_live_migration.max_simultaneous_migrations }}
+    $targetAnyNetwork = [System.Convert]::ToBoolean("{{ node_live_migration.use_any_network | bool }}")
+
+    Set-VMHost `
+      -VirtualMachineMigrationEnabled:$targetEnabled `
+      -VirtualMachineMigrationAuthenticationType $targetProtocol `
+      -VirtualMachineMigrationPerformanceOption $targetPerf `
+      -MaximumVirtualMachineMigrations $targetMax `
+      -UseAnyNetworkForMigration:$targetAnyNetwork
+
+    if (-not $targetAnyNetwork) {
+      $networks = "{{ lm_networks_csv }}".Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+      if ($networks.Count -gt 0) {
+        Set-VMHost -VirtualMachineMigrationNetwork $networks
+      }
+    }
+
+    $after = Get-VMHost
+    $changed = $false
+    if ($before.VirtualMachineMigrationEnabled -ne $after.VirtualMachineMigrationEnabled) { $changed = $true }
+    if ($before.VirtualMachineMigrationAuthenticationType -ne $after.VirtualMachineMigrationAuthenticationType) { $changed = $true }
+    if ($before.VirtualMachineMigrationPerformanceOption -ne $after.VirtualMachineMigrationPerformanceOption) { $changed = $true }
+    if ($before.MaximumVirtualMachineMigrations -ne $after.MaximumVirtualMachineMigrations) { $changed = $true }
+    if ($before.UseAnyNetworkForMigration -ne $after.UseAnyNetworkForMigration) { $changed = $true }
+
+    if ($changed) { Write-Output "CHANGED" } else { Write-Output "UNCHANGED" }
+  register: hyperv_lm
+  changed_when: "'CHANGED' in hyperv_lm.stdout"

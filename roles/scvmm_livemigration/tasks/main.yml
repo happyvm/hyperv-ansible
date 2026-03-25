@@ -1,0 +1,28 @@
+---
+- name: Construire la liste des clusters multisite
+  ansible.builtin.set_fact:
+    multisite_clusters: "{{ sites | dict2items | map(attribute='value.clusters') | flatten }}"
+
+- name: Appliquer la Live Migration par cluster via SCVMM
+  ansible.windows.win_shell: |
+    Import-Module VirtualMachineManager
+
+    $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+    $cluster = Get-SCVMHostCluster -VMMServer $server | Where-Object { $_.Name -eq "{{ item.name }}" }
+
+    if (-not $cluster) {
+      throw "Cluster {{ item.name }} introuvable dans SCVMM"
+    }
+
+    $targetMax = [int]{{ (live_migration.max_simultaneous_migrations | int) if (item.live_migration is not defined) else (item.live_migration.max_simultaneous_migrations | int) }}
+
+    # Exemple: propriété ajustable selon votre version SCVMM
+    # Adaptez la cmdlet Set-SCVMHostCluster aux capacités exactes de votre environnement.
+    Set-SCVMHostCluster -VMHostCluster $cluster -MigrationMaximum $targetMax | Out-Null
+
+    Write-Output "CHANGED"
+  loop: "{{ multisite_clusters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: scvmm_lm
+  changed_when: true
