@@ -1,0 +1,39 @@
+---
+# Exemple de modèle multisite. Surcharger par site/cluster selon vos besoins.
+
+live_migration:
+  enabled: true
+  auth_protocol: CredSSP
+  performance_option: SMB
+  max_simultaneous_migrations: 4
+  use_any_network: false
+  networks:
+    - 10.10.100.0/24
+    - 10.20.100.0/24
+
+scvmm:
+  management_server: scvmm01.contoso.local
+  port: 8100
+
+sites:
+  paris:
+    clusters:
+      - name: CLU-PARIS-HV
+        hyperv_nodes:
+          - hvparis01.contoso.local
+          - hvparis02.contoso.local
+        scvmm_host_group: Paris/Production
+        live_migration:
+          max_simultaneous_migrations: 6
+          networks:
+            - 10.10.100.0/24
+  lyon:
+    clusters:
+      - name: CLU-LYON-HV
+        hyperv_nodes:
+          - hvlyon01.contoso.local
+        scvmm_host_group: Lyon/Production
+        live_migration:
+          max_simultaneous_migrations: 3
+          networks:
+            - 10.20.100.0/24

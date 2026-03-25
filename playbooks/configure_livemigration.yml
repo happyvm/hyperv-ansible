@@ -1,0 +1,28 @@
+---
+- name: Configurer la Live Migration Hyper-V (niveau noeud)
+  hosts: hyperv_nodes
+  gather_facts: false
+  vars:
+    node_live_migration: "{{ live_migration | combine(site_live_migration | default({}), recursive=True) }}"
+  tasks:
+    - name: Déterminer la surcharge site/cluster pour le noeud courant
+      ansible.builtin.set_fact:
+        site_live_migration: >-
+          {{
+            item.live_migration | default({})
+            if inventory_hostname in (item.hyperv_nodes | default([]))
+            else (site_live_migration | default({}))
+          }}
+      loop: "{{ sites | dict2items | map(attribute='value.clusters') | flatten }}"
+
+    - name: Appliquer la configuration Live Migration Hyper-V
+      ansible.builtin.include_role:
+        name: hyperv_livemigration
+
+- name: Configurer la Live Migration via SCVMM (niveau cluster/groupe)
+  hosts: scvmm_servers
+  gather_facts: false
+  tasks:
+    - name: Appliquer la configuration Live Migration côté SCVMM
+      ansible.builtin.include_role:
+        name: scvmm_livemigration
