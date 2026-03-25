@@ -4,25 +4,50 @@
     multisite_clusters: "{{ sites | dict2items | map(attribute='value.clusters') | flatten }}"
 
 - name: Appliquer la Live Migration par cluster via SCVMM
-  ansible.windows.win_shell: |
-    Import-Module VirtualMachineManager
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
 
-    $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
-    $cluster = Get-SCVMHostCluster -VMMServer $server | Where-Object { $_.Name -eq "{{ item.name }}" }
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+      $cluster = Get-SCVMHostCluster -VMMServer $server | Where-Object { $_.Name -eq "{{ item.name }}" }
 
-    if (-not $cluster) {
-      throw "Cluster {{ item.name }} introuvable dans SCVMM"
-    }
+      if (-not $cluster) {
+        throw "Cluster {{ item.name }} introuvable dans SCVMM"
+      }
 
-    $targetMax = [int]{{ (live_migration.max_simultaneous_migrations | int) if (item.live_migration is not defined) else (item.live_migration.max_simultaneous_migrations | int) }}
+      {% if scvmm_live_migration.enforce_host_group | bool %}
+      $expectedHostGroup = "{{ item.scvmm_host_group | default('') }}"
+      if ([string]::IsNullOrWhiteSpace($expectedHostGroup)) {
+        throw "Cluster {{ item.name }} sans scvmm_host_group alors que enforce_host_group=true"
+      }
+      if ($cluster.HostGroupPath -ne $expectedHostGroup) {
+        throw "Cluster {{ item.name }} trouvé dans le host group '$($cluster.HostGroupPath)' au lieu de '$expectedHostGroup'"
+      }
+      {% endif %}
 
-    # Exemple: propriété ajustable selon votre version SCVMM
-    # Adaptez la cmdlet Set-SCVMHostCluster aux capacités exactes de votre environnement.
-    Set-SCVMHostCluster -VMHostCluster $cluster -MigrationMaximum $targetMax | Out-Null
+      $targetMax = [int]{{ (live_migration.max_simultaneous_migrations | int) if (item.live_migration is not defined) else (item.live_migration.max_simultaneous_migrations | int) }}
+      $currentMax = [int]$cluster.MigrationMaximum
 
-    Write-Output "CHANGED"
+      if ($currentMax -eq $targetMax) {
+        Write-Output 'UNCHANGED'
+        return
+      }
+
+      if ({{ (ansible_check_mode or scvmm_live_migration.check_only) | ternary('$true', '$false') }}) {
+        Write-Output "WOULD_CHANGE: MigrationMaximum $currentMax -> $targetMax"
+        return
+      }
+
+      Set-SCVMHostCluster -VMHostCluster $cluster -MigrationMaximum $targetMax | Out-Null
+      Write-Output "CHANGED: MigrationMaximum $currentMax -> $targetMax"
   loop: "{{ multisite_clusters }}"
   loop_control:
     label: "{{ item.name }}"
   register: scvmm_lm
-  changed_when: true
+  changed_when: >-
+    scvmm_lm.results
+    | map(attribute='output')
+    | map('join', ' ')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

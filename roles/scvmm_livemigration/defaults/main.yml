@@ -1,0 +1,5 @@
+---
+# Paramètres optionnels SCVMM.
+scvmm_live_migration:
+  enforce_host_group: false
+  check_only: false

@@ -3,18 +3,34 @@
   hosts: hyperv_nodes
   gather_facts: false
   vars:
-    node_live_migration: "{{ live_migration | combine(site_live_migration | default({}), recursive=True) }}"
-  tasks:
-    - name: Déterminer la surcharge site/cluster pour le noeud courant
-      ansible.builtin.set_fact:
-        site_live_migration: >-
-          {{
-            item.live_migration | default({})
-            if inventory_hostname in (item.hyperv_nodes | default([]))
-            else (site_live_migration | default({}))
-          }}
-      loop: "{{ sites | dict2items | map(attribute='value.clusters') | flatten }}"
+    cluster_overrides: >-
+      {{
+        sites | dict2items
+        | map(attribute='value.clusters')
+        | flatten
+        | selectattr('hyperv_nodes', 'defined')
+        | selectattr('hyperv_nodes', 'contains', inventory_hostname)
+        | map(attribute='live_migration')
+        | list
+      }}
+    node_live_migration: >-
+      {{
+        live_migration
+        | combine((cluster_overrides | first | default({})), recursive=True)
+      }}
 
+  pre_tasks:
+    - name: Valider les paramètres Live Migration fusionnés
+      ansible.builtin.assert:
+        that:
+          - node_live_migration.auth_protocol in ['CredSSP', 'Kerberos']
+          - node_live_migration.performance_option in ['TCPIP', 'Compression', 'SMB']
+          - (node_live_migration.max_simultaneous_migrations | int) > 0
+          - (node_live_migration.max_simultaneous_storage_migrations | int) > 0
+          - node_live_migration.use_any_network | type_debug == 'bool'
+        fail_msg: "Variables live_migration invalides pour {{ inventory_hostname }}"
+
+  tasks:
     - name: Appliquer la configuration Live Migration Hyper-V
       ansible.builtin.include_role:
         name: hyperv_livemigration
