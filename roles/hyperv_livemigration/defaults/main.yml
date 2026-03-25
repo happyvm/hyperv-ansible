@@ -1,0 +1,10 @@
+---
+# Valeurs par défaut de sécurité pour éviter les erreurs de variable manquante.
+node_live_migration:
+  enabled: true
+  auth_protocol: CredSSP
+  performance_option: SMB
+  max_simultaneous_migrations: 2
+  max_simultaneous_storage_migrations: 2
+  use_any_network: true
+  networks: []

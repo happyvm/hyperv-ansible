@@ -4,37 +4,56 @@
     lm_networks_csv: "{{ (node_live_migration.networks | default([])) | join(',') }}"
 
 - name: Configurer la Live Migration Hyper-V sur le noeud
-  ansible.windows.win_shell: |
-    $before = Get-VMHost
+  ansible.windows.win_powershell:
+    script: |
+      $before = Get-VMHost
 
-    $targetEnabled = [System.Convert]::ToBoolean("{{ node_live_migration.enabled | bool }}")
-    $targetProtocol = "{{ node_live_migration.auth_protocol }}"
-    $targetPerf = "{{ node_live_migration.performance_option }}"
-    $targetMax = [int]{{ node_live_migration.max_simultaneous_migrations }}
-    $targetAnyNetwork = [System.Convert]::ToBoolean("{{ node_live_migration.use_any_network | bool }}")
+      $targetEnabled = [System.Convert]::ToBoolean("{{ node_live_migration.enabled | bool }}")
+      $targetProtocol = "{{ node_live_migration.auth_protocol }}"
+      $targetPerf = "{{ node_live_migration.performance_option }}"
+      $targetMaxVm = [int]{{ node_live_migration.max_simultaneous_migrations | int }}
+      $targetMaxStorage = [int]{{ node_live_migration.max_simultaneous_storage_migrations | int }}
+      $targetAnyNetwork = [System.Convert]::ToBoolean("{{ node_live_migration.use_any_network | bool }}")
 
-    Set-VMHost `
-      -VirtualMachineMigrationEnabled:$targetEnabled `
-      -VirtualMachineMigrationAuthenticationType $targetProtocol `
-      -VirtualMachineMigrationPerformanceOption $targetPerf `
-      -MaximumVirtualMachineMigrations $targetMax `
-      -UseAnyNetworkForMigration:$targetAnyNetwork
+      Set-VMHost `
+        -VirtualMachineMigrationEnabled:$targetEnabled `
+        -VirtualMachineMigrationAuthenticationType $targetProtocol `
+        -VirtualMachineMigrationPerformanceOption $targetPerf `
+        -MaximumVirtualMachineMigrations $targetMaxVm `
+        -MaximumStorageMigrations $targetMaxStorage `
+        -UseAnyNetworkForMigration:$targetAnyNetwork
 
-    if (-not $targetAnyNetwork) {
-      $networks = "{{ lm_networks_csv }}".Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
-      if ($networks.Count -gt 0) {
-        Set-VMHost -VirtualMachineMigrationNetwork $networks
+      if (-not $targetAnyNetwork) {
+        $networks = "{{ lm_networks_csv }}".Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+        if ($networks.Count -gt 0) {
+          Set-VMHost -VirtualMachineMigrationNetwork $networks
+        }
       }
-    }
 
-    $after = Get-VMHost
-    $changed = $false
-    if ($before.VirtualMachineMigrationEnabled -ne $after.VirtualMachineMigrationEnabled) { $changed = $true }
-    if ($before.VirtualMachineMigrationAuthenticationType -ne $after.VirtualMachineMigrationAuthenticationType) { $changed = $true }
-    if ($before.VirtualMachineMigrationPerformanceOption -ne $after.VirtualMachineMigrationPerformanceOption) { $changed = $true }
-    if ($before.MaximumVirtualMachineMigrations -ne $after.MaximumVirtualMachineMigrations) { $changed = $true }
-    if ($before.UseAnyNetworkForMigration -ne $after.UseAnyNetworkForMigration) { $changed = $true }
+      $after = Get-VMHost
 
-    if ($changed) { Write-Output "CHANGED" } else { Write-Output "UNCHANGED" }
+      $currentNetworks = @($after.MigrationNetworks)
+      $targetNetworks = @("{{ lm_networks_csv }}".Split(',', [System.StringSplitOptions]::RemoveEmptyEntries))
+
+      $isNetworkEqual = $true
+      if (-not $targetAnyNetwork) {
+        $isNetworkEqual = (@($currentNetworks | Sort-Object) -join ',') -eq (@($targetNetworks | Sort-Object) -join ',')
+      }
+
+      $changed =
+        ($before.VirtualMachineMigrationEnabled -ne $after.VirtualMachineMigrationEnabled) -or
+        ($before.VirtualMachineMigrationAuthenticationType -ne $after.VirtualMachineMigrationAuthenticationType) -or
+        ($before.VirtualMachineMigrationPerformanceOption -ne $after.VirtualMachineMigrationPerformanceOption) -or
+        ($before.MaximumVirtualMachineMigrations -ne $after.MaximumVirtualMachineMigrations) -or
+        ($before.MaximumStorageMigrations -ne $after.MaximumStorageMigrations) -or
+        ($before.UseAnyNetworkForMigration -ne $after.UseAnyNetworkForMigration) -or
+        (-not $isNetworkEqual)
+
+      if ($changed) {
+        Write-Output 'CHANGED'
+      }
+      else {
+        Write-Output 'UNCHANGED'
+      }
   register: hyperv_lm
-  changed_when: "'CHANGED' in hyperv_lm.stdout"
+  changed_when: "'CHANGED' in (hyperv_lm.output | join(' '))"

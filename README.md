@@ -2,9 +2,10 @@
 
 Blueprint Ansible pour **gérer un environnement Hyper-V + SCVMM en multisite**.
 
-Cette première version se concentre sur le **paramétrage de la Live Migration**:
-- au niveau **noeud Hyper-V** ;
-- au niveau **cluster/groupe** via **SCVMM**.
+Cette version couvre une base d'exploitation utile pour la **Live Migration**:
+- au niveau **noeud Hyper-V** (paramètres VM + stockage) ;
+- au niveau **cluster/groupe** via **SCVMM** ;
+- avec des contrôles d'entrée (validation de variables) et un mode simulation côté SCVMM.
 
 ---
 
@@ -12,7 +13,8 @@ Cette première version se concentre sur le **paramétrage de la Live Migration*
 
 Permettre une configuration standardisée par défaut, puis des surcharges par site/cluster:
 - tronc commun global (authentification, performance SMB/Compression, etc.) ;
-- overrides par cluster (nombre de migrations simultanées, sous-réseaux autorisés, etc.).
+- overrides par cluster (nombre de migrations simultanées, sous-réseaux autorisés, etc.) ;
+- garde-fous pour éviter des dérives d'affectation SCVMM (host group attendu).
 
 ---
 
@@ -29,9 +31,13 @@ Permettre une configuration standardisée par défaut, puis des surcharges par s
 │   └── configure_livemigration.yml
 └── roles/
     ├── hyperv_livemigration/
+    │   ├── defaults/
+    │   │   └── main.yml
     │   └── tasks/
     │       └── main.yml
     └── scvmm_livemigration/
+        ├── defaults/
+        │   └── main.yml
         └── tasks/
             └── main.yml
 ```
@@ -52,7 +58,8 @@ Permettre une configuration standardisée par défaut, puis des surcharges par s
 Le fichier `inventories/multisite/group_vars/all.yml` définit:
 - `live_migration`: paramètres globaux par défaut ;
 - `sites`: liste des sites et clusters ;
-- `scvmm`: informations de connexion au management server.
+- `scvmm`: informations de connexion au management server ;
+- `scvmm_live_migration`: options de sécurité/simulation côté SCVMM.
 
 Exemple de logique:
 - `live_migration` global = baseline.
@@ -68,7 +75,21 @@ Exemple de logique:
 ansible-playbook -i inventories/multisite/hosts.yml playbooks/configure_livemigration.yml --syntax-check
 ```
 
-### 2) Appliquer la configuration
+### 2) Simuler l'impact SCVMM sans modifier
+
+Deux options:
+
+```bash
+ansible-playbook -i inventories/multisite/hosts.yml playbooks/configure_livemigration.yml --check
+```
+
+ou via variable:
+
+```bash
+ansible-playbook -i inventories/multisite/hosts.yml playbooks/configure_livemigration.yml -e scvmm_live_migration.check_only=true
+```
+
+### 3) Appliquer la configuration
 
 ```bash
 ansible-playbook -i inventories/multisite/hosts.yml playbooks/configure_livemigration.yml
@@ -81,24 +102,19 @@ ansible-playbook -i inventories/multisite/hosts.yml playbooks/configure_livemigr
 ### Hyper-V (`hyperv_nodes`)
 Le rôle `hyperv_livemigration`:
 - active/désactive la Live Migration ;
-- configure le protocole d'authentification (`CredSSP` / Kerberos) ;
-- configure l'option de performance (`SMB`, etc.) ;
-- définit le nombre max de migrations simultanées ;
-- limite les réseaux de migration si `use_any_network: false`.
+- configure le protocole d'authentification (`CredSSP` / `Kerberos`) ;
+- configure l'option de performance (`TCPIP`, `Compression`, `SMB`) ;
+- définit le nombre max de migrations **VM** simultanées ;
+- définit le nombre max de migrations **Storage** simultanées ;
+- limite les réseaux de migration si `use_any_network: false` ;
+- marque `changed` uniquement en cas de drift réel.
 
 ### SCVMM (`scvmm_servers`)
 Le rôle `scvmm_livemigration`:
 - parcourt les clusters déclarés dans la structure multisite ;
-- applique un paramètre de migration (exemple: maximum de migrations) via cmdlets SCVMM.
+- compare l'état courant au `MigrationMaximum` attendu ;
+- supporte un mode simulation (`--check` ou `scvmm_live_migration.check_only`) ;
+- peut refuser l'application si le cluster n'est pas dans le `scvmm_host_group` attendu (`enforce_host_group: true`).
 
 > ⚠️ Les cmdlets/paramètres SCVMM peuvent varier selon la version.
 > Adaptez précisément `roles/scvmm_livemigration/tasks/main.yml` à votre version SCVMM.
-
----
-
-## Étapes suivantes recommandées
-
-- Ajouter un mode `check`/dry-run plus fin pour SCVMM.
-- Ajouter la gestion des réseaux CSV / SMB Multichannel / QoS par site.
-- Ajouter des variables chiffrées (`ansible-vault`) pour les credentials.
-- Ajouter des tests CI (lint YAML + syntax-check playbook).
