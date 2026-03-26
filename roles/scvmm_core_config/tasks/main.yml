@@ -1,0 +1,280 @@
+---
+- name: Valider la structure de scvmm_core_config
+  ansible.builtin.assert:
+    that:
+      - scvmm.management_server is defined
+      - (scvmm.management_server | string | length) > 0
+      - (scvmm.port | int) > 0
+      - scvmm_core_config is mapping
+      - scvmm_core_config.host_groups is mapping
+      - scvmm_core_config.library_shares is mapping
+      - scvmm_core_config.logical_networks is mapping
+      - scvmm_core_config.vm_networks is mapping
+      - scvmm_core_config.clouds is mapping
+
+- name: Configurer SCVMM (hors Live Migration)
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
+
+      $isCheckMode = {{ (ansible_check_mode or scvmm_core_config.check_only) | ternary('$true', '$false') }}
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+
+      function Has-Command {
+        param([Parameter(Mandatory=$true)][string]$Name)
+        return $null -ne (Get-Command -Name $Name -ErrorAction SilentlyContinue)
+      }
+
+      function Emit-Result {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+
+        if ($Changed) {
+          Write-Output ("CHANGED: [$Scope] $Message")
+        }
+        else {
+          Write-Output ("UNCHANGED: [$Scope] $Message")
+        }
+      }
+
+      # -------------------------
+      # Host Groups
+      # -------------------------
+      $hostGroupsEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.host_groups.enabled | bool }}")
+      if ($hostGroupsEnabled) {
+        if (-not (Has-Command -Name 'Get-SCVMHostGroup') -or -not (Has-Command -Name 'New-SCVMHostGroup')) {
+          Write-Output 'INFO: Cmdlets host group indisponibles, bloc ignoré'
+        }
+        else {
+          $hostGroups = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.host_groups.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($hostGroups)) {
+            $path = [string]$entry.path
+            if ([string]::IsNullOrWhiteSpace($path)) {
+              throw 'host_groups.items[].path est obligatoire'
+            }
+
+            $segments = @($path.Split('/') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($segments.Count -eq 0) {
+              throw "Path host group invalide: '$path'"
+            }
+
+            $parent = Get-SCVMHostGroup -VMMServer $server | Where-Object { $_.ParentHostGroup -eq $null } | Select-Object -First 1
+            if (-not $parent) {
+              throw 'Host group racine introuvable dans SCVMM'
+            }
+
+            $currentPath = ''
+            foreach ($segment in $segments) {
+              $currentPath = if ([string]::IsNullOrEmpty($currentPath)) { $segment } else { "$currentPath/$segment" }
+
+              $existing = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq $currentPath } | Select-Object -First 1
+              if ($existing) {
+                $parent = $existing
+                continue
+              }
+
+              if ($isCheckMode) {
+                Emit-Result -Scope 'host_group' -Message "WOULD_CREATE $currentPath" -Changed:$true
+                break
+              }
+
+              $parent = New-SCVMHostGroup -VMMServer $server -Name $segment -ParentVMHostGroup $parent
+              Emit-Result -Scope 'host_group' -Message "CREATED $currentPath" -Changed:$true
+            }
+          }
+        }
+      }
+
+      # -------------------------
+      # Library Shares
+      # -------------------------
+      $libraryEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.library_shares.enabled | bool }}")
+      if ($libraryEnabled) {
+        if (-not (Has-Command -Name 'Get-SCLibraryShare') -or -not (Has-Command -Name 'New-SCLibraryShare')) {
+          Write-Output 'INFO: Cmdlets library share indisponibles, bloc ignoré'
+        }
+        else {
+          $shares = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.library_shares.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($shares)) {
+            $name = [string]$entry.name
+            $path = [string]$entry.path
+            $description = [string]$entry.description
+            if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($path)) {
+              throw 'library_shares.items[].name et .path sont obligatoires'
+            }
+
+            $existing = Get-SCLibraryShare -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'library_share' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'library_share' -Message "WOULD_CREATE $name => $path" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; Path = $path }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            New-SCLibraryShare @params | Out-Null
+            Emit-Result -Scope 'library_share' -Message "CREATED $name => $path" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Logical Networks
+      # -------------------------
+      $logicalEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.logical_networks.enabled | bool }}")
+      if ($logicalEnabled) {
+        if (-not (Has-Command -Name 'Get-SCLogicalNetwork') -or -not (Has-Command -Name 'New-SCLogicalNetwork')) {
+          Write-Output 'INFO: Cmdlets logical network indisponibles, bloc ignoré'
+        }
+        else {
+          $logicalNetworks = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.logical_networks.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($logicalNetworks)) {
+            $name = [string]$entry.name
+            $description = [string]$entry.description
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'logical_networks.items[].name est obligatoire'
+            }
+
+            $existing = Get-SCLogicalNetwork -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'logical_network' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'logical_network' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            New-SCLogicalNetwork @params | Out-Null
+            Emit-Result -Scope 'logical_network' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # VM Networks
+      # -------------------------
+      $vmNetworkEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.vm_networks.enabled | bool }}")
+      if ($vmNetworkEnabled) {
+        if (-not (Has-Command -Name 'Get-SCVMNetwork') -or -not (Has-Command -Name 'New-SCVMNetwork')) {
+          Write-Output 'INFO: Cmdlets VM network indisponibles, bloc ignoré'
+        }
+        else {
+          $vmNetworks = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.vm_networks.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($vmNetworks)) {
+            $name = [string]$entry.name
+            $logicalNetworkName = [string]$entry.logical_network
+
+            if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($logicalNetworkName)) {
+              throw 'vm_networks.items[].name et .logical_network sont obligatoires'
+            }
+
+            $existing = Get-SCVMNetwork -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'vm_network' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            $logicalNetwork = Get-SCLogicalNetwork -VMMServer $server | Where-Object { $_.Name -eq $logicalNetworkName } | Select-Object -First 1
+            if (-not $logicalNetwork) {
+              throw "Réseau logique '$logicalNetworkName' introuvable pour VM network '$name'"
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'vm_network' -Message "WOULD_CREATE $name (logical: $logicalNetworkName)" -Changed:$true
+              continue
+            }
+
+            New-SCVMNetwork -VMMServer $server -Name $name -LogicalNetwork $logicalNetwork | Out-Null
+            Emit-Result -Scope 'vm_network' -Message "CREATED $name (logical: $logicalNetworkName)" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Clouds
+      # -------------------------
+      $cloudsEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.clouds.enabled | bool }}")
+      if ($cloudsEnabled) {
+        if (-not (Has-Command -Name 'Get-SCCloud') -or -not (Has-Command -Name 'New-SCCloud')) {
+          Write-Output 'INFO: Cmdlets cloud indisponibles, bloc ignoré'
+        }
+        else {
+          $clouds = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.clouds.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($clouds)) {
+            $name = [string]$entry.name
+            $description = [string]$entry.description
+            $hostGroupPaths = @($entry.vm_host_groups)
+
+            if ([string]::IsNullOrWhiteSpace($name) -or $hostGroupPaths.Count -eq 0) {
+              throw 'clouds.items[].name et .vm_host_groups[] sont obligatoires'
+            }
+
+            $existing = Get-SCCloud -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'cloud' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            $resolvedGroups = @()
+            foreach ($path in $hostGroupPaths) {
+              $group = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq [string]$path } | Select-Object -First 1
+              if (-not $group) {
+                throw "VMHostGroup '$path' introuvable pour cloud '$name'"
+              }
+              $resolvedGroups += $group
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'cloud' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; VMHostGroup = $resolvedGroups }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            New-SCCloud @params | Out-Null
+            Emit-Result -Scope 'cloud' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+  register: scvmm_core
+  changed_when: >-
+    scvmm_core.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

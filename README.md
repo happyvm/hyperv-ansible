@@ -2,10 +2,10 @@
 
 Blueprint Ansible pour **gérer un environnement Hyper-V + SCVMM en multisite**.
 
-Cette version couvre une base d'exploitation utile pour la **Live Migration**:
-- au niveau **noeud Hyper-V** (paramètres VM + stockage) ;
-- au niveau **cluster/groupe** via **SCVMM** ;
-- avec des contrôles d'entrée (validation de variables) et un mode simulation côté SCVMM.
+Cette version couvre :
+- une base d'exploitation utile pour la **Live Migration** (Hyper-V + SCVMM) ;
+- une couche **SCVMM hors Live Migration** pour créer/maintenir des objets coeur (host groups, library shares, logical networks, VM networks, clouds) ;
+- des contrôles d'entrée (validation de variables) et un mode simulation côté SCVMM.
 
 ---
 
@@ -35,6 +35,11 @@ Permettre une configuration standardisée par défaut, puis des surcharges par s
     │   │   └── main.yml
     │   └── tasks/
     │       └── main.yml
+    ├── scvmm_core_config/
+    │   ├── defaults/
+    │   │   └── main.yml
+    │   └── tasks/
+    │       └── main.yml
     └── scvmm_livemigration/
         ├── defaults/
         │   └── main.yml
@@ -59,7 +64,8 @@ Le fichier `inventories/multisite/group_vars/all.yml` définit:
 - `live_migration`: paramètres globaux par défaut ;
 - `sites`: liste des sites et clusters ;
 - `scvmm`: informations de connexion au management server ;
-- `scvmm_live_migration`: options de sécurité/simulation/compatibilité côté SCVMM.
+- `scvmm_live_migration`: options de sécurité/simulation/compatibilité côté SCVMM ;
+- `scvmm_core_config`: objets SCVMM hors Live Migration (host groups, bibliothèque, réseaux, clouds).
 
 Exemple de logique:
 - `live_migration` global = baseline.
@@ -102,6 +108,15 @@ ansible-playbook -i inventories/multisite/hosts.yml playbooks/configure_livemigr
 ---
 
 ## Ce que fait le playbook
+
+### SCVMM hors Live Migration (`scvmm_servers`)
+Le rôle `scvmm_core_config` (opt-in par bloc):
+- crée l'arborescence de `host_groups` ;
+- crée des `library_shares` ;
+- crée des `logical_networks` ;
+- crée des `vm_networks` attachés à un réseau logique ;
+- crée des `clouds` reliés à un ou plusieurs host groups ;
+- détecte les cmdlets indisponibles et ignore proprement le bloc concerné.
 
 ### Hyper-V (`hyperv_nodes`)
 Le rôle `hyperv_livemigration`:
