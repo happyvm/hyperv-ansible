@@ -1,0 +1,24 @@
+---
+# Gestion des virtual switches Hyper-V.
+# Désactivé par défaut ; activer bloc par bloc dans group_vars ou host_vars.
+
+hyperv_vswitch:
+  check_only: false
+  enabled: false
+  items: []
+  # Exemple de switch externe (lié à une carte réseau physique) :
+  # - name: "vSwitch-Prod"
+  #   type: External             # External | Internal | Private
+  #   net_adapter_name: "Ethernet 1"  # obligatoire si type=External
+  #   allow_management_os: true       # partager l'adaptateur avec le mgmt OS
+  #   notes: "Switch de production"
+  #   bandwidth_reservation_mode: Default  # Default | Weight | Absolute | None
+  #   minimum_bandwidth_mode: None        # None | Weight | Absolute
+  #
+  # Exemple de switch interne :
+  # - name: "vSwitch-Internal"
+  #   type: Internal
+  #
+  # Exemple de switch privé :
+  # - name: "vSwitch-Private"
+  #   type: Private

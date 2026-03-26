@@ -11,6 +11,11 @@
       - scvmm_core_config.logical_networks is mapping
       - scvmm_core_config.vm_networks is mapping
       - scvmm_core_config.clouds is mapping
+      - scvmm_core_config.storage_classifications is mapping
+      - scvmm_core_config.port_profiles is mapping
+      - scvmm_core_config.logical_switches is mapping
+      - scvmm_core_config.hardware_profiles is mapping
+      - scvmm_core_config.user_roles is mapping
 
 - name: Configurer SCVMM (hors Live Migration)
   ansible.windows.win_powershell:
@@ -268,6 +273,324 @@
 
             New-SCCloud @params | Out-Null
             Emit-Result -Scope 'cloud' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Storage Classifications
+      # -------------------------
+      $scEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.storage_classifications.enabled | bool }}")
+      if ($scEnabled) {
+        if (-not (Has-Command -Name 'Get-SCStorageClassification') -or -not (Has-Command -Name 'New-SCStorageClassification')) {
+          Write-Output 'INFO: Cmdlets storage classification indisponibles, bloc ignoré'
+        }
+        else {
+          $classifications = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.storage_classifications.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($classifications)) {
+            $name        = [string]$entry.name
+            $description = [string]$entry.description
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'storage_classifications.items[].name est obligatoire'
+            }
+
+            $existing = Get-SCStorageClassification -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'storage_classification' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'storage_classification' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            New-SCStorageClassification @params | Out-Null
+            Emit-Result -Scope 'storage_classification' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Port Profiles
+      # -------------------------
+      $ppEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.port_profiles.enabled | bool }}")
+      if ($ppEnabled) {
+        if (-not (Has-Command -Name 'Get-SCPortProfile') -or -not (Has-Command -Name 'New-SCUplinkPortProfile')) {
+          Write-Output 'INFO: Cmdlets port profile indisponibles, bloc ignoré'
+        }
+        else {
+          $portProfiles = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.port_profiles.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($portProfiles)) {
+            $name        = [string]$entry.name
+            $ppType      = [string]$entry.type        # Uplink | VirtualNetwork
+            $description = [string]$entry.description
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'port_profiles.items[].name est obligatoire'
+            }
+            if ($ppType -notin @('Uplink', 'VirtualNetwork')) {
+              throw "port_profiles.items[].type doit être Uplink ou VirtualNetwork (reçu: '$ppType')"
+            }
+
+            $existing = Get-SCPortProfile -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'port_profile' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'port_profile' -Message "WOULD_CREATE $name (type=$ppType)" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            if ($ppType -eq 'Uplink') {
+              $lbAlgo = [string]$entry.load_balancing_algorithm
+              $teamMode = [string]$entry.teaming_mode
+
+              if (-not [string]::IsNullOrWhiteSpace($lbAlgo)) {
+                $params['LoadBalancingAlgorithm'] = $lbAlgo
+              }
+              if (-not [string]::IsNullOrWhiteSpace($teamMode)) {
+                $params['TeamingMode'] = $teamMode
+              }
+
+              New-SCUplinkPortProfile @params | Out-Null
+            }
+            else {
+              # VirtualNetwork
+              New-SCVirtualNetworkAdapterPortProfile @params | Out-Null
+            }
+
+            Emit-Result -Scope 'port_profile' -Message "CREATED $name (type=$ppType)" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Logical Switches
+      # -------------------------
+      $lsEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.logical_switches.enabled | bool }}")
+      if ($lsEnabled) {
+        if (-not (Has-Command -Name 'Get-SCLogicalSwitch') -or -not (Has-Command -Name 'New-SCLogicalSwitch')) {
+          Write-Output 'INFO: Cmdlets logical switch indisponibles, bloc ignoré'
+        }
+        else {
+          $logicalSwitches = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.logical_switches.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($logicalSwitches)) {
+            $name             = [string]$entry.name
+            $description      = [string]$entry.description
+            $uplinkPPName     = [string]$entry.uplink_port_profile
+            $minBwMode        = [string]$entry.minimum_bandwidth_mode
+            $enableSriov      = if ($null -ne $entry.enable_sriov) { [System.Convert]::ToBoolean([string]$entry.enable_sriov) } else { $false }
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'logical_switches.items[].name est obligatoire'
+            }
+
+            $existing = Get-SCLogicalSwitch -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'logical_switch' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'logical_switch' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; EnableSriov = $enableSriov }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+            if (-not [string]::IsNullOrWhiteSpace($minBwMode)) {
+              $params['MinimumBandwidthMode'] = $minBwMode
+            }
+
+            $newSwitch = New-SCLogicalSwitch @params
+
+            # Associer un uplink port profile si spécifié
+            if (-not [string]::IsNullOrWhiteSpace($uplinkPPName)) {
+              $uplinkPP = Get-SCUplinkPortProfile -VMMServer $server | Where-Object { $_.Name -eq $uplinkPPName } | Select-Object -First 1
+              if (-not $uplinkPP) {
+                Write-Output "INFO: [logical_switch] Uplink port profile '$uplinkPPName' introuvable pour '$name', association ignorée"
+              }
+              else {
+                New-SCLogicalSwitchVirtualPortProfile -LogicalSwitch $newSwitch -UplinkPortProfile $uplinkPP | Out-Null
+              }
+            }
+
+            Emit-Result -Scope 'logical_switch' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Hardware Profiles
+      # -------------------------
+      $hwEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.hardware_profiles.enabled | bool }}")
+      if ($hwEnabled) {
+        if (-not (Has-Command -Name 'Get-SCHardwareProfile') -or -not (Has-Command -Name 'New-SCHardwareProfile')) {
+          Write-Output 'INFO: Cmdlets hardware profile indisponibles, bloc ignoré'
+        }
+        else {
+          $hardwareProfiles = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.hardware_profiles.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($hardwareProfiles)) {
+            $name        = [string]$entry.name
+            $description = [string]$entry.description
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'hardware_profiles.items[].name est obligatoire'
+            }
+
+            $existing = Get-SCHardwareProfile -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'hardware_profile' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'hardware_profile' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            $cpuCount = if ($null -ne $entry.cpu_count) { [int]$entry.cpu_count } else { 0 }
+            if ($cpuCount -gt 0) {
+              $params['CPUCount'] = $cpuCount
+            }
+
+            $memMb = if ($null -ne $entry.memory_mb) { [int]$entry.memory_mb } else { 0 }
+            if ($memMb -gt 0) {
+              $params['MemoryMB'] = $memMb
+            }
+
+            $dynMem = if ($null -ne $entry.dynamic_memory_enabled) { [System.Convert]::ToBoolean([string]$entry.dynamic_memory_enabled) } else { $false }
+            $params['DynamicMemoryEnabled'] = $dynMem
+
+            if ($dynMem) {
+              $dynMin = if ($null -ne $entry.dynamic_memory_min_mb)    { [int]$entry.dynamic_memory_min_mb    } else { 0 }
+              $dynMax = if ($null -ne $entry.dynamic_memory_max_mb)    { [int]$entry.dynamic_memory_max_mb    } else { 0 }
+              $dynBuf = if ($null -ne $entry.dynamic_memory_buffer_pct){ [int]$entry.dynamic_memory_buffer_pct} else { 0 }
+
+              if ($dynMin -gt 0) { $params['DynamicMemoryMinimumMB']     = $dynMin }
+              if ($dynMax -gt 0) { $params['DynamicMemoryMaximumMB']     = $dynMax }
+              if ($dynBuf -gt 0) { $params['DynamicMemoryBufferPercent'] = $dynBuf }
+            }
+
+            New-SCHardwareProfile @params | Out-Null
+            Emit-Result -Scope 'hardware_profile' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # User Roles
+      # -------------------------
+      $urEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.user_roles.enabled | bool }}")
+      if ($urEnabled) {
+        if (-not (Has-Command -Name 'Get-SCUserRole') -or -not (Has-Command -Name 'New-SCUserRole')) {
+          Write-Output 'INFO: Cmdlets user role indisponibles, bloc ignoré'
+        }
+        else {
+          $userRoles = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.user_roles.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($userRoles)) {
+            $name        = [string]$entry.name
+            $profile     = [string]$entry.profile      # Administrator | TenantAdmin | VMAdmin | ReadOnly | SelfServiceUser
+            $description = [string]$entry.description
+            $members     = @($entry.members | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            $scopes      = @($entry.scopes  | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'user_roles.items[].name est obligatoire'
+            }
+            if ([string]::IsNullOrWhiteSpace($profile)) {
+              throw "user_roles.items[].profile est obligatoire pour '$name'"
+            }
+
+            $existing = Get-SCUserRole -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              # Synchronisation des membres (ajout uniquement, pas de suppression)
+              $roleChanges = @()
+              foreach ($member in $members) {
+                $alreadyMember = $existing.Members | Where-Object { $_.Principal -eq $member }
+                if (-not $alreadyMember) {
+                  if (-not $isCheckMode) {
+                    Add-SCUserRoleMember -VMMServer $server -UserRole $existing -UserRoleMember $member -ErrorAction SilentlyContinue | Out-Null
+                  }
+                  $roleChanges += "ADD_MEMBER $member"
+                }
+              }
+
+              if ($roleChanges.Count -eq 0) {
+                Emit-Result -Scope 'user_role' -Message "EXISTS $name (membres à jour)" -Changed:$false
+              }
+              else {
+                Emit-Result -Scope 'user_role' -Message "UPDATED $name : $($roleChanges -join '; ')" -Changed:$true
+              }
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'user_role' -Message "WOULD_CREATE $name (profile=$profile)" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; UserRoleProfile = $profile }
+            if (-not [string]::IsNullOrWhiteSpace($description)) {
+              $params['Description'] = $description
+            }
+
+            $newRole = New-SCUserRole @params
+
+            # Ajout des membres
+            foreach ($member in $members) {
+              Add-SCUserRoleMember -VMMServer $server -UserRole $newRole -UserRoleMember $member -ErrorAction SilentlyContinue | Out-Null
+            }
+
+            # Ajout des scopes (host groups) pour les rôles restreints
+            if ($scopes.Count -gt 0 -and $profile -in @('VMAdmin', 'SelfServiceUser', 'TenantAdmin')) {
+              foreach ($scopePath in $scopes) {
+                $hg = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq $scopePath } | Select-Object -First 1
+                if ($hg) {
+                  Set-SCUserRole -UserRole $newRole -AddScope $hg -ErrorAction SilentlyContinue | Out-Null
+                }
+                else {
+                  Write-Output "INFO: [user_role] Host group '$scopePath' introuvable pour scope '$name', ignoré"
+                }
+              }
+            }
+
+            Emit-Result -Scope 'user_role' -Message "CREATED $name (profile=$profile)" -Changed:$true
           }
         }
       }

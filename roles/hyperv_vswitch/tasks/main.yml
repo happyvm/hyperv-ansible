@@ -1,0 +1,117 @@
+---
+- name: Gérer les virtual switches Hyper-V
+  ansible.windows.win_powershell:
+    script: |
+      $isCheckMode = [System.Convert]::ToBoolean("{{ (ansible_check_mode or hyperv_vswitch.check_only) | ternary('true', 'false') }}")
+      $enabled     = [System.Convert]::ToBoolean("{{ hyperv_vswitch.enabled | bool }}")
+
+      if (-not $enabled) {
+        Write-Output 'INFO: [vswitch] bloc désactivé, ignoré'
+        return
+      }
+
+      $switches = ConvertFrom-Json -InputObject @'
+{{ hyperv_vswitch.items | default([]) | to_json }}
+'@
+
+      function Emit {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+        if ($Changed) { Write-Output "CHANGED: [$Scope] $Message" }
+        else           { Write-Output "UNCHANGED: [$Scope] $Message" }
+      }
+
+      foreach ($entry in @($switches)) {
+        $name       = [string]$entry.name
+        $switchType = [string]$entry.type          # External | Internal | Private
+
+        if ([string]::IsNullOrWhiteSpace($name)) {
+          throw 'hyperv_vswitch.items[].name est obligatoire'
+        }
+        if ($switchType -notin @('External', 'Internal', 'Private')) {
+          throw "Type de switch invalide '$switchType' pour '$name' (External|Internal|Private)"
+        }
+
+        $existing = Get-VMSwitch -Name $name -ErrorAction SilentlyContinue
+        if ($existing) {
+          # Vérification des propriétés modifiables
+          $swChanges = @()
+          $swParams  = @{ Name = $name }
+
+          $notesTarget = [string]$entry.notes
+          if (-not [string]::IsNullOrWhiteSpace($notesTarget) -and ($existing.Notes -ne $notesTarget)) {
+            $swParams['Notes'] = $notesTarget
+            $swChanges += "Notes -> '$notesTarget'"
+          }
+
+          # AllowManagementOS (uniquement pour External)
+          if ($switchType -eq 'External' -and $null -ne $entry.allow_management_os) {
+            $targetAllow = [System.Convert]::ToBoolean([string]$entry.allow_management_os)
+            if ($existing.AllowManagementOS -ne $targetAllow) {
+              $swParams['AllowManagementOS'] = $targetAllow
+              $swChanges += "AllowManagementOS $($existing.AllowManagementOS) -> $targetAllow"
+            }
+          }
+
+          if ($swChanges.Count -eq 0) {
+            Emit -Scope 'vswitch' -Message "EXISTS (inchangé) : $name" -Changed:$false
+          }
+          elseif ($isCheckMode) {
+            Emit -Scope 'vswitch' -Message "WOULD_UPDATE $name : $($swChanges -join '; ')" -Changed:$true
+          }
+          else {
+            Set-VMSwitch @swParams
+            Emit -Scope 'vswitch' -Message "UPDATED $name : $($swChanges -join '; ')" -Changed:$true
+          }
+          continue
+        }
+
+        # Création
+        $createParams = @{ Name = $name; SwitchType = $switchType }
+
+        if ($switchType -eq 'External') {
+          $adapter = [string]$entry.net_adapter_name
+          if ([string]::IsNullOrWhiteSpace($adapter)) {
+            throw "net_adapter_name est obligatoire pour le switch externe '$name'"
+          }
+          $createParams['NetAdapterName'] = $adapter
+
+          $allowMgmt = if ($null -ne $entry.allow_management_os) {
+            [System.Convert]::ToBoolean([string]$entry.allow_management_os)
+          } else { $true }
+          $createParams['AllowManagementOS'] = $allowMgmt
+        }
+
+        $notes = [string]$entry.notes
+        if (-not [string]::IsNullOrWhiteSpace($notes)) {
+          $createParams['Notes'] = $notes
+        }
+
+        if ($isCheckMode) {
+          Emit -Scope 'vswitch' -Message "WOULD_CREATE $name (type=$switchType)" -Changed:$true
+          continue
+        }
+
+        New-VMSwitch @createParams | Out-Null
+
+        # Bandwidth reservation mode (optionnel, post-création)
+        $bwMode = [string]$entry.bandwidth_reservation_mode
+        if (-not [string]::IsNullOrWhiteSpace($bwMode) -and $bwMode -ne 'Default') {
+          $sw = Get-VMSwitch -Name $name
+          if ($sw.PSObject.Properties.Name -contains 'BandwidthReservationMode') {
+            Set-VMSwitch -Name $name -DefaultFlowMinimumBandwidthAbsolute 0 -ErrorAction SilentlyContinue
+          }
+        }
+
+        Emit -Scope 'vswitch' -Message "CREATED $name (type=$switchType)" -Changed:$true
+      }
+  register: hyperv_vsw
+  changed_when: >-
+    hyperv_vsw.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

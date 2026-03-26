@@ -1,0 +1,10 @@
+---
+# Point d'entrée principal : applique toute la configuration Hyper-V + SCVMM.
+# Lancer avec : ansible-playbook site.yml -i inventories/multisite
+# Mode simulation : ansible-playbook site.yml -i inventories/multisite --check
+
+- name: Configuration hôte Hyper-V (paramètres + virtual switches)
+  ansible.builtin.import_playbook: playbooks/configure_hyperv.yml
+
+- name: Configuration Live Migration (Hyper-V direct + SCVMM)
+  ansible.builtin.import_playbook: playbooks/configure_livemigration.yml

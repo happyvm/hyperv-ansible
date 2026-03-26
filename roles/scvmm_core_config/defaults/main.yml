@@ -40,3 +40,70 @@ scvmm_core_config:
     #   vm_host_groups:
     #     - "Paris/Production"
     #   description: "Cloud production Paris"
+
+  # Classifications de stockage SCVMM (étiquettes qualité attachées aux LUN/volumes).
+  storage_classifications:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "GOLD"
+    #   description: "Stockage SSD haute performance"
+    # - name: "SILVER"
+    #   description: "Stockage SAS standard"
+    # - name: "BRONZE"
+    #   description: "Stockage SATA archivage"
+
+  # Profils de port SCVMM (uplink et réseau virtuel).
+  port_profiles:
+    enabled: false
+    items: []
+    # Exemple profil uplink :
+    # - name: "PP-UPLINK-PROD"
+    #   type: Uplink           # Uplink | VirtualNetwork
+    #   description: "Profil uplink production"
+    #   load_balancing_algorithm: HyperVPort  # HyperVPort | Dynamic | IPHash | MacAddress | MinimumBandwidth | TransportPorts
+    #   teaming_mode: SwitchIndependent       # SwitchIndependent | Static | Lacp
+    #
+    # Exemple profil réseau virtuel :
+    # - name: "PP-VNET-PROD"
+    #   type: VirtualNetwork
+    #   description: "Profil réseau VM production"
+
+  # Logical switches SCVMM (associent des uplink port profiles aux hôtes).
+  logical_switches:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "LS-PROD"
+    #   description: "Logical switch production"
+    #   uplink_port_profile: "PP-UPLINK-PROD"
+    #   minimum_bandwidth_mode: Default  # Default | Weight | Absolute | None
+    #   enable_sriov: false
+
+  # Profils matériels SCVMM (modèles CPU/mémoire réutilisables dans les templates).
+  hardware_profiles:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "HW-2vCPU-4GB"
+    #   description: "2 vCPU, 4 Go RAM dynamique"
+    #   cpu_count: 2
+    #   memory_mb: 4096
+    #   dynamic_memory_enabled: true
+    #   dynamic_memory_min_mb: 512
+    #   dynamic_memory_max_mb: 8192
+    #   dynamic_memory_buffer_pct: 20  # % de mémoire tampon (5-2000)
+
+  # Rôles utilisateur SCVMM.
+  user_roles:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "Admins-Virtualisation"
+    #   profile: Administrator     # Administrator | TenantAdmin | VMAdmin | ReadOnly | SelfServiceUser
+    #   description: "Administrateurs de la couche virtualisation"
+    #   members:
+    #     - "CONTOSO\\GRP-Admins-HV"
+    #   scopes:                    # Groupes hôtes accessibles (pour VMAdmin/SelfServiceUser)
+    #     - "Paris/Production"
+    #     - "Lyon/Production"

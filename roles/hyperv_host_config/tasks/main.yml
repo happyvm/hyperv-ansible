@@ -1,0 +1,150 @@
+---
+- name: Configurer les paramètres hôte Hyper-V (hors Live Migration)
+  ansible.windows.win_powershell:
+    script: |
+      $isCheckMode = [System.Convert]::ToBoolean("{{ (ansible_check_mode or hyperv_host_config.check_only) | ternary('true', 'false') }}")
+      $anyChanged  = $false
+
+      function Emit {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+        if ($Changed) { Write-Output "CHANGED: [$Scope] $Message" }
+        else           { Write-Output "UNCHANGED: [$Scope] $Message" }
+      }
+
+      # ------------------------------------------------------------------
+      # Chemins de stockage (VirtualHardDiskPath / VirtualMachinePath)
+      # ------------------------------------------------------------------
+      $storageEnabled = [System.Convert]::ToBoolean("{{ hyperv_host_config.storage.enabled | bool }}")
+      if ($storageEnabled) {
+        $vhdPath = "{{ hyperv_host_config.storage.virtual_hard_disk_path | default('') }}"
+        $vmPath  = "{{ hyperv_host_config.storage.virtual_machine_path  | default('') }}"
+
+        $host_ = Get-VMHost
+        $storageParams = @{}
+        $storageChanges = @()
+
+        if (-not [string]::IsNullOrWhiteSpace($vhdPath) -and ($host_.VirtualHardDiskPath -ne $vhdPath)) {
+          $storageParams['VirtualHardDiskPath'] = $vhdPath
+          $storageChanges += "VirtualHardDiskPath '$($host_.VirtualHardDiskPath)' -> '$vhdPath'"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($vmPath) -and ($host_.VirtualMachinePath -ne $vmPath)) {
+          $storageParams['VirtualMachinePath'] = $vmPath
+          $storageChanges += "VirtualMachinePath '$($host_.VirtualMachinePath)' -> '$vmPath'"
+        }
+
+        if ($storageChanges.Count -eq 0) {
+          Emit -Scope 'storage' -Message 'chemins inchangés' -Changed:$false
+        }
+        elseif ($isCheckMode) {
+          Emit -Scope 'storage' -Message ("WOULD_CHANGE: " + ($storageChanges -join '; ')) -Changed:$true
+        }
+        else {
+          Set-VMHost @storageParams
+          Emit -Scope 'storage' -Message ($storageChanges -join '; ') -Changed:$true
+          $anyChanged = $true
+        }
+      }
+
+      # ------------------------------------------------------------------
+      # NUMA spanning
+      # ------------------------------------------------------------------
+      $numaEnabled = [System.Convert]::ToBoolean("{{ hyperv_host_config.numa.enabled | bool }}")
+      if ($numaEnabled) {
+        $targetSpanning = [System.Convert]::ToBoolean("{{ hyperv_host_config.numa.spanning_enabled | bool }}")
+        $current        = (Get-VMHost).NumaSpanningEnabled
+
+        if ($current -eq $targetSpanning) {
+          Emit -Scope 'numa' -Message "NumaSpanningEnabled=$targetSpanning (inchangé)" -Changed:$false
+        }
+        elseif ($isCheckMode) {
+          Emit -Scope 'numa' -Message "WOULD_CHANGE NumaSpanningEnabled $current -> $targetSpanning" -Changed:$true
+        }
+        else {
+          Set-VMHost -NumaSpanningEnabled $targetSpanning
+          Emit -Scope 'numa' -Message "NumaSpanningEnabled $current -> $targetSpanning" -Changed:$true
+          $anyChanged = $true
+        }
+      }
+
+      # ------------------------------------------------------------------
+      # Enhanced Session Mode
+      # ------------------------------------------------------------------
+      $esmEnabled = [System.Convert]::ToBoolean("{{ hyperv_host_config.enhanced_session_mode.enabled | bool }}")
+      if ($esmEnabled) {
+        $targetAllow     = [System.Convert]::ToBoolean("{{ hyperv_host_config.enhanced_session_mode.allow      | bool }}")
+        $targetAllowUser = [System.Convert]::ToBoolean("{{ hyperv_host_config.enhanced_session_mode.allow_user | bool }}")
+
+        $vmHost = Get-VMHost
+        $esmParams  = @{}
+        $esmChanges = @()
+
+        # EnableEnhancedSessionMode
+        if ($vmHost.PSObject.Properties.Name -contains 'EnableEnhancedSessionMode') {
+          if ($vmHost.EnableEnhancedSessionMode -ne $targetAllow) {
+            $esmParams['EnableEnhancedSessionMode'] = $targetAllow
+            $esmChanges += "EnableEnhancedSessionMode $($vmHost.EnableEnhancedSessionMode) -> $targetAllow"
+          }
+        }
+
+        # EnableEnhancedSessionModeForUser (propriété présente sur certaines versions)
+        if ($vmHost.PSObject.Properties.Name -contains 'EnableEnhancedSessionModeForUser') {
+          if ($vmHost.EnableEnhancedSessionModeForUser -ne $targetAllowUser) {
+            $esmParams['EnableEnhancedSessionModeForUser'] = $targetAllowUser
+            $esmChanges += "EnableEnhancedSessionModeForUser $($vmHost.EnableEnhancedSessionModeForUser) -> $targetAllowUser"
+          }
+        }
+
+        if ($esmChanges.Count -eq 0) {
+          Emit -Scope 'enhanced_session_mode' -Message 'inchangé' -Changed:$false
+        }
+        elseif ($isCheckMode) {
+          Emit -Scope 'enhanced_session_mode' -Message ("WOULD_CHANGE: " + ($esmChanges -join '; ')) -Changed:$true
+        }
+        else {
+          Set-VMHost @esmParams
+          Emit -Scope 'enhanced_session_mode' -Message ($esmChanges -join '; ') -Changed:$true
+          $anyChanged = $true
+        }
+      }
+
+      # ------------------------------------------------------------------
+      # Resource Metering
+      # ------------------------------------------------------------------
+      $rmEnabled = [System.Convert]::ToBoolean("{{ hyperv_host_config.resource_metering.enabled | bool }}")
+      if ($rmEnabled) {
+        $targetRM = [System.Convert]::ToBoolean("{{ hyperv_host_config.resource_metering.enable | bool }}")
+
+        if (Get-Command -Name 'Enable-VMResourceMetering' -ErrorAction SilentlyContinue) {
+          # Vérifie l'état actuel via Get-VMResourcePool ou une VM de test
+          # (pas de getter global ; on applique systématiquement si le flag change)
+          if ($targetRM) {
+            if (-not $isCheckMode) {
+              Get-VM | Enable-VMResourceMetering -ErrorAction SilentlyContinue
+            }
+            Emit -Scope 'resource_metering' -Message "Enable sur toutes les VM ($( if ($isCheckMode) { 'check' } else { 'appliqué' } ))" -Changed:$true
+            $anyChanged = $true
+          }
+          else {
+            if (-not $isCheckMode) {
+              Get-VM | Disable-VMResourceMetering -ErrorAction SilentlyContinue
+            }
+            Emit -Scope 'resource_metering' -Message "Disable sur toutes les VM ($( if ($isCheckMode) { 'check' } else { 'appliqué' } ))" -Changed:$true
+            $anyChanged = $true
+          }
+        }
+        else {
+          Write-Output 'INFO: [resource_metering] cmdlets indisponibles, bloc ignoré'
+        }
+      }
+  register: hyperv_host_cfg
+  changed_when: >-
+    hyperv_host_cfg.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0
