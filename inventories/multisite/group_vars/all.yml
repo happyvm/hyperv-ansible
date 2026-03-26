@@ -44,3 +44,41 @@ sites:
           max_simultaneous_migrations: 3
           networks:
             - 10.20.100.0/24
+
+# Objets SCVMM hors Live Migration (désactivés par défaut).
+scvmm_core_config:
+  check_only: false
+
+  host_groups:
+    enabled: true
+    items:
+      - path: Paris/Production
+      - path: Lyon/Production
+
+  library_shares:
+    enabled: false
+    items:
+      - name: LIB-PARIS-ISO
+        path: \\\\filesrv01\\scvmm-lib-paris
+        description: Bibliothèque ISO Paris
+
+  logical_networks:
+    enabled: false
+    items:
+      - name: LN-PROD
+        description: Réseau logique de production
+
+  vm_networks:
+    enabled: false
+    items:
+      - name: VMNET-PROD
+        logical_network: LN-PROD
+
+  clouds:
+    enabled: false
+    items:
+      - name: CLOUD-PROD-FR
+        vm_host_groups:
+          - Paris/Production
+          - Lyon/Production
+        description: Cloud production France

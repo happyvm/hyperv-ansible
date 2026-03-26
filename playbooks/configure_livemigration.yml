@@ -35,6 +35,14 @@
       ansible.builtin.include_role:
         name: hyperv_livemigration
 
+- name: Configurer SCVMM hors Live Migration (objets coeur)
+  hosts: scvmm_servers
+  gather_facts: false
+  tasks:
+    - name: Appliquer la configuration SCVMM hors Live Migration
+      ansible.builtin.include_role:
+        name: scvmm_core_config
+
 - name: Configurer la Live Migration via SCVMM (niveau cluster/groupe)
   hosts: scvmm_servers
   gather_facts: false
