@@ -2,6 +2,7 @@
 - name: Configurer la Live Migration Hyper-V (niveau noeud)
   hosts: hyperv_nodes
   gather_facts: false
+  tags: [hyperv, live_migration]
   vars:
     cluster_overrides: >-
       {{
@@ -35,17 +36,10 @@
       ansible.builtin.include_role:
         name: hyperv_livemigration
 
-- name: Configurer SCVMM hors Live Migration (objets coeur)
-  hosts: scvmm_servers
-  gather_facts: false
-  tasks:
-    - name: Appliquer la configuration SCVMM hors Live Migration
-      ansible.builtin.include_role:
-        name: scvmm_core_config
-
 - name: Configurer la Live Migration via SCVMM (niveau cluster/groupe)
   hosts: scvmm_servers
   gather_facts: false
+  tags: [scvmm, live_migration]
   tasks:
     - name: Appliquer la configuration Live Migration côté SCVMM
       ansible.builtin.include_role:

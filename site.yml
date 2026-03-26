@@ -1,0 +1,41 @@
+---
+# Point d'entrée principal.
+# Applique toute la configuration Hyper-V + SCVMM dans l'ordre des dépendances.
+#
+# Exécution complète :
+#   ansible-playbook site.yml -i inventories/multisite
+#
+# Simulation (check mode) :
+#   ansible-playbook site.yml -i inventories/multisite --check
+#
+# Domaine ciblé (exemples) :
+#   ansible-playbook site.yml -i inventories/multisite --tags scvmm_networking
+#   ansible-playbook site.yml -i inventories/multisite --tags scvmm_storage,scvmm_compute
+
+# --- Hyper-V ---
+- name: Configuration hôte Hyper-V
+  ansible.builtin.import_playbook: playbooks/configure_hyperv.yml
+
+# --- SCVMM : infrastructure de base (host groups) ---
+- name: Infrastructure SCVMM
+  ansible.builtin.import_playbook: playbooks/configure_scvmm_infra.yml
+
+# --- SCVMM : réseau (dépend de infra) ---
+- name: Réseau SCVMM
+  ansible.builtin.import_playbook: playbooks/configure_scvmm_network.yml
+
+# --- SCVMM : stockage (indépendant) ---
+- name: Stockage SCVMM
+  ansible.builtin.import_playbook: playbooks/configure_scvmm_storage.yml
+
+# --- SCVMM : calcul (dépend de infra pour les clouds) ---
+- name: Calcul SCVMM
+  ansible.builtin.import_playbook: playbooks/configure_scvmm_compute.yml
+
+# --- SCVMM : accès (dépend de infra pour les scopes) ---
+- name: Accès SCVMM
+  ansible.builtin.import_playbook: playbooks/configure_scvmm_access.yml
+
+# --- Live Migration (Hyper-V direct + SCVMM) ---
+- name: Live Migration
+  ansible.builtin.import_playbook: playbooks/configure_livemigration.yml

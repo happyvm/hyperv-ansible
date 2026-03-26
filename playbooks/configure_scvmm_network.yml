@@ -1,0 +1,13 @@
+---
+# Réseau SCVMM : logical networks, VM networks, port profiles,
+# logical switches et déploiement des virtual switches sur les hôtes.
+# Prérequis : configure_scvmm_infra.yml (host groups).
+
+- name: Configurer le réseau SCVMM
+  hosts: scvmm_servers
+  gather_facts: false
+  tags: [scvmm, scvmm_networking]
+  tasks:
+    - name: Appliquer la configuration réseau SCVMM
+      ansible.builtin.include_role:
+        name: scvmm_networking

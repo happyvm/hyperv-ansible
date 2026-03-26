@@ -1,0 +1,36 @@
+---
+# Valeurs par défaut pour la configuration hôte Hyper-V (hors Live Migration).
+# Tous les blocs sont opt-in : seules les clés explicitement définies dans
+# group_vars/host_vars remplacent ces valeurs.
+
+hyperv_host_config:
+  check_only: false
+
+  # Chemins de stockage par défaut sur l'hôte Hyper-V.
+  storage:
+    enabled: false
+    # Répertoire par défaut pour les disques virtuels (.vhd/.vhdx).
+    # Laisser vide pour ne pas modifier.
+    virtual_hard_disk_path: ""
+    # Répertoire par défaut pour les fichiers de configuration des VM.
+    # Laisser vide pour ne pas modifier.
+    virtual_machine_path: ""
+
+  # Paramètres NUMA et mémoire de l'hôte.
+  numa:
+    enabled: false
+    # true = les VM peuvent s'étaler sur plusieurs nœuds NUMA.
+    spanning_enabled: true
+
+  # Enhanced Session Mode (redirection USB, presse-papier, audio, etc.).
+  enhanced_session_mode:
+    enabled: false
+    # true = activer l'Enhanced Session Mode au niveau hôte.
+    allow: true
+    # true = activer côté utilisateur (User-Mode Enhanced Session Mode).
+    allow_user: true
+
+  # Compteurs de ressources (télémétrie vCPU / mémoire par VM).
+  resource_metering:
+    enabled: false
+    enable: false

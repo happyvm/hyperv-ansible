@@ -1,0 +1,11 @@
+---
+# Stockage SCVMM : library shares et classifications de stockage.
+
+- name: Configurer le stockage SCVMM
+  hosts: scvmm_servers
+  gather_facts: false
+  tags: [scvmm, scvmm_storage]
+  tasks:
+    - name: Appliquer la configuration stockage SCVMM
+      ansible.builtin.include_role:
+        name: scvmm_storage

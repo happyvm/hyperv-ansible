@@ -45,8 +45,35 @@ sites:
           networks:
             - 10.20.100.0/24
 
-# Objets SCVMM hors Live Migration (désactivés par défaut).
-scvmm_core_config:
+# ---------------------------------------------------------------------------
+# Configuration hôte Hyper-V (hors Live Migration).
+# ---------------------------------------------------------------------------
+hyperv_host_config:
+  check_only: false
+
+  storage:
+    enabled: false
+    virtual_hard_disk_path: "C:\\ClusterStorage\\Volume1\\VHDs"
+    virtual_machine_path:   "C:\\ClusterStorage\\Volume1\\VMs"
+
+  numa:
+    enabled: false
+    spanning_enabled: true
+
+  enhanced_session_mode:
+    enabled: false
+    allow: true
+    allow_user: true
+
+  resource_metering:
+    enabled: false
+    enable: false
+
+# ---------------------------------------------------------------------------
+# Infrastructure SCVMM : host groups.
+# À configurer en premier (prérequis des autres domaines SCVMM).
+# ---------------------------------------------------------------------------
+scvmm_infra:
   check_only: false
 
   host_groups:
@@ -55,6 +82,68 @@ scvmm_core_config:
       - path: Paris/Production
       - path: Lyon/Production
 
+# ---------------------------------------------------------------------------
+# Réseau SCVMM : logical networks, VM networks, port profiles,
+# logical switches, virtual switches.
+# ---------------------------------------------------------------------------
+scvmm_networking:
+  check_only: false
+
+  logical_networks:
+    enabled: false
+    items:
+      - name: LN-PROD
+        description: Réseau logique de production
+      - name: LN-MGMT
+        description: Réseau logique de gestion
+
+  vm_networks:
+    enabled: false
+    items:
+      - name: VMNET-PROD
+        logical_network: LN-PROD
+      - name: VMNET-MGMT
+        logical_network: LN-MGMT
+
+  port_profiles:
+    enabled: false
+    items:
+      - name: PP-UPLINK-PROD
+        type: Uplink
+        description: Profil uplink production
+        load_balancing_algorithm: HyperVPort
+        teaming_mode: SwitchIndependent
+      - name: PP-VNET-PROD
+        type: VirtualNetwork
+        description: Profil réseau VM production
+
+  logical_switches:
+    enabled: false
+    items:
+      - name: LS-PROD
+        description: Logical switch production
+        uplink_port_profile: PP-UPLINK-PROD
+        minimum_bandwidth_mode: Default
+        enable_sriov: false
+
+  virtual_switches:
+    enabled: false
+    items:
+      - logical_switch: LS-PROD
+        uplink_port_profile: PP-UPLINK-PROD
+        net_adapter_name: "Ethernet 1"
+        host_group: Paris/Production
+      - logical_switch: LS-PROD
+        uplink_port_profile: PP-UPLINK-PROD
+        net_adapter_name: "Ethernet 1"
+        host_group: Lyon/Production
+
+# ---------------------------------------------------------------------------
+# Stockage SCVMM : library shares et classifications.
+# ---------------------------------------------------------------------------
+scvmm_storage:
+  check_only: false
+
   library_shares:
     enabled: false
     items:
@@ -62,17 +151,21 @@ scvmm_core_config:
         path: \\\\filesrv01\\scvmm-lib-paris
         description: Bibliothèque ISO Paris
 
-  logical_networks:
+  storage_classifications:
     enabled: false
     items:
-      - name: LN-PROD
-        description: Réseau logique de production
+      - name: GOLD
+        description: Stockage SSD haute performance
+      - name: SILVER
+        description: Stockage SAS standard
+      - name: BRONZE
+        description: Stockage SATA archivage
 
-  vm_networks:
-    enabled: false
-    items:
-      - name: VMNET-PROD
-        logical_network: LN-PROD
+# ---------------------------------------------------------------------------
+# Calcul SCVMM : clouds et profils matériels.
+# ---------------------------------------------------------------------------
+scvmm_compute:
+  check_only: false
 
   clouds:
     enabled: false
@@ -82,3 +175,49 @@ scvmm_core_config:
           - Paris/Production
           - Lyon/Production
         description: Cloud production France
+
+  hardware_profiles:
+    enabled: false
+    items:
+      - name: HW-2vCPU-4GB
+        description: 2 vCPU, 4 Go RAM dynamique
+        cpu_count: 2
+        memory_mb: 4096
+        dynamic_memory_enabled: true
+        dynamic_memory_min_mb: 512
+        dynamic_memory_max_mb: 8192
+        dynamic_memory_buffer_pct: 20
+      - name: HW-4vCPU-8GB
+        description: 4 vCPU, 8 Go RAM statique
+        cpu_count: 4
+        memory_mb: 8192
+        dynamic_memory_enabled: false
+
+# ---------------------------------------------------------------------------
+# Accès SCVMM : rôles utilisateur.
+# ---------------------------------------------------------------------------
+scvmm_access:
+  check_only: false
+
+  user_roles:
+    enabled: false
+    items:
+      - name: Admins-Virtualisation
+        profile: Administrator
+        description: Administrateurs de la couche virtualisation
+        members:
+          - CONTOSO\GRP-Admins-HV
+      - name: Ops-VM-Paris
+        profile: VMAdmin
+        description: Opérateurs VM site Paris
+        members:
+          - CONTOSO\GRP-Ops-Paris
+        scopes:
+          - Paris/Production
+      - name: Ops-VM-Lyon
+        profile: VMAdmin
+        description: Opérateurs VM site Lyon
+        members:
+          - CONTOSO\GRP-Ops-Lyon
+        scopes:
+          - Lyon/Production

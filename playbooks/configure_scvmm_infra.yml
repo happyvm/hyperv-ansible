@@ -1,0 +1,12 @@
+---
+# Infrastructure de base SCVMM : host groups.
+# À exécuter en premier — les autres rôles SCVMM en dépendent.
+
+- name: Configurer l'infrastructure SCVMM (host groups)
+  hosts: scvmm_servers
+  gather_facts: false
+  tags: [scvmm, scvmm_infra]
+  tasks:
+    - name: Appliquer la configuration infrastructure SCVMM
+      ansible.builtin.include_role:
+        name: scvmm_infra

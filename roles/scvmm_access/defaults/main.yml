@@ -1,0 +1,18 @@
+---
+# Accès et délégation SCVMM : rôles utilisateur.
+# Prérequis : scvmm_infra (host groups pour les scopes).
+scvmm_access:
+  check_only: false
+
+  user_roles:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "Admins-Virtualisation"
+    #   profile: Administrator     # Administrator | TenantAdmin | VMAdmin | ReadOnly | SelfServiceUser
+    #   description: "Administrateurs de la couche virtualisation"
+    #   members:
+    #     - "CONTOSO\\GRP-Admins-HV"
+    #   scopes:                    # Groupes hôtes accessibles (VMAdmin/SelfServiceUser/TenantAdmin)
+    #     - "Paris/Production"
+    #     - "Lyon/Production"

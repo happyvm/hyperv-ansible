@@ -1,0 +1,123 @@
+---
+- name: Valider la structure de scvmm_storage
+  ansible.builtin.assert:
+    that:
+      - scvmm.management_server is defined
+      - (scvmm.management_server | string | length) > 0
+      - (scvmm.port | int) > 0
+      - scvmm_storage is mapping
+      - scvmm_storage.library_shares is mapping
+      - scvmm_storage.storage_classifications is mapping
+
+- name: Configurer le stockage SCVMM
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
+
+      $isCheckMode = {{ (ansible_check_mode or scvmm_storage.check_only) | ternary('$true', '$false') }}
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+
+      function Has-Command {
+        param([Parameter(Mandatory=$true)][string]$Name)
+        return $null -ne (Get-Command -Name $Name -ErrorAction SilentlyContinue)
+      }
+
+      function Emit-Result {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+        if ($Changed) { Write-Output ("CHANGED: [$Scope] $Message") }
+        else           { Write-Output ("UNCHANGED: [$Scope] $Message") }
+      }
+
+      # -------------------------
+      # Library Shares
+      # -------------------------
+      $libraryEnabled = [System.Convert]::ToBoolean("{{ scvmm_storage.library_shares.enabled | bool }}")
+      if ($libraryEnabled) {
+        if (-not (Has-Command -Name 'Get-SCLibraryShare') -or -not (Has-Command -Name 'New-SCLibraryShare')) {
+          Write-Output 'INFO: Cmdlets library share indisponibles, bloc ignoré'
+        }
+        else {
+          $shares = ConvertFrom-Json -InputObject @'
+{{ scvmm_storage.library_shares.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($shares)) {
+            $name        = [string]$entry.name
+            $path        = [string]$entry.path
+            $description = [string]$entry.description
+
+            if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($path)) {
+              throw 'library_shares.items[].name et .path sont obligatoires'
+            }
+
+            $existing = Get-SCLibraryShare -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'library_share' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'library_share' -Message "WOULD_CREATE $name => $path" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; Path = $path }
+            if (-not [string]::IsNullOrWhiteSpace($description)) { $params['Description'] = $description }
+
+            New-SCLibraryShare @params | Out-Null
+            Emit-Result -Scope 'library_share' -Message "CREATED $name => $path" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Storage Classifications
+      # -------------------------
+      $scEnabled = [System.Convert]::ToBoolean("{{ scvmm_storage.storage_classifications.enabled | bool }}")
+      if ($scEnabled) {
+        if (-not (Has-Command -Name 'Get-SCStorageClassification') -or -not (Has-Command -Name 'New-SCStorageClassification')) {
+          Write-Output 'INFO: Cmdlets storage classification indisponibles, bloc ignoré'
+        }
+        else {
+          $classifications = ConvertFrom-Json -InputObject @'
+{{ scvmm_storage.storage_classifications.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($classifications)) {
+            $name        = [string]$entry.name
+            $description = [string]$entry.description
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'storage_classifications.items[].name est obligatoire'
+            }
+
+            $existing = Get-SCStorageClassification -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'storage_classification' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'storage_classification' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name }
+            if (-not [string]::IsNullOrWhiteSpace($description)) { $params['Description'] = $description }
+
+            New-SCStorageClassification @params | Out-Null
+            Emit-Result -Scope 'storage_classification' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+  register: scvmm_storage_result
+  changed_when: >-
+    scvmm_storage_result.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

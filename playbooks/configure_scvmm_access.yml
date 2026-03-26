@@ -1,0 +1,12 @@
+---
+# Accès et délégation SCVMM : rôles utilisateur.
+# Prérequis : configure_scvmm_infra.yml (host groups pour les scopes).
+
+- name: Configurer les accès SCVMM
+  hosts: scvmm_servers
+  gather_facts: false
+  tags: [scvmm, scvmm_access]
+  tasks:
+    - name: Appliquer la configuration accès SCVMM
+      ansible.builtin.include_role:
+        name: scvmm_access

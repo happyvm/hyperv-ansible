@@ -1,0 +1,119 @@
+---
+- name: Valider la structure de scvmm_access
+  ansible.builtin.assert:
+    that:
+      - scvmm.management_server is defined
+      - (scvmm.management_server | string | length) > 0
+      - (scvmm.port | int) > 0
+      - scvmm_access is mapping
+      - scvmm_access.user_roles is mapping
+
+- name: Configurer les accès SCVMM (rôles utilisateur)
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
+
+      $isCheckMode = {{ (ansible_check_mode or scvmm_access.check_only) | ternary('$true', '$false') }}
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+
+      function Has-Command {
+        param([Parameter(Mandatory=$true)][string]$Name)
+        return $null -ne (Get-Command -Name $Name -ErrorAction SilentlyContinue)
+      }
+
+      function Emit-Result {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+        if ($Changed) { Write-Output ("CHANGED: [$Scope] $Message") }
+        else           { Write-Output ("UNCHANGED: [$Scope] $Message") }
+      }
+
+      # -------------------------
+      # User Roles
+      # -------------------------
+      $urEnabled = [System.Convert]::ToBoolean("{{ scvmm_access.user_roles.enabled | bool }}")
+      if ($urEnabled) {
+        if (-not (Has-Command -Name 'Get-SCUserRole') -or -not (Has-Command -Name 'New-SCUserRole')) {
+          Write-Output 'INFO: Cmdlets user role indisponibles, bloc ignoré'
+        }
+        else {
+          $userRoles = ConvertFrom-Json -InputObject @'
+{{ scvmm_access.user_roles.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($userRoles)) {
+            $name        = [string]$entry.name
+            $profile     = [string]$entry.profile
+            $description = [string]$entry.description
+            $members     = @($entry.members | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            $scopes      = @($entry.scopes  | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'user_roles.items[].name est obligatoire'
+            }
+            if ([string]::IsNullOrWhiteSpace($profile)) {
+              throw "user_roles.items[].profile est obligatoire pour '$name'"
+            }
+
+            $existing = Get-SCUserRole -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              $roleChanges = @()
+              foreach ($member in $members) {
+                $alreadyMember = $existing.Members | Where-Object { $_.Principal -eq $member }
+                if (-not $alreadyMember) {
+                  if (-not $isCheckMode) {
+                    Add-SCUserRoleMember -VMMServer $server -UserRole $existing -UserRoleMember $member -ErrorAction SilentlyContinue | Out-Null
+                  }
+                  $roleChanges += "ADD_MEMBER $member"
+                }
+              }
+
+              if ($roleChanges.Count -eq 0) {
+                Emit-Result -Scope 'user_role' -Message "EXISTS $name (membres à jour)" -Changed:$false
+              }
+              else {
+                Emit-Result -Scope 'user_role' -Message "UPDATED $name : $($roleChanges -join '; ')" -Changed:$true
+              }
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'user_role' -Message "WOULD_CREATE $name (profile=$profile)" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; UserRoleProfile = $profile }
+            if (-not [string]::IsNullOrWhiteSpace($description)) { $params['Description'] = $description }
+
+            $newRole = New-SCUserRole @params
+
+            foreach ($member in $members) {
+              Add-SCUserRoleMember -VMMServer $server -UserRole $newRole -UserRoleMember $member -ErrorAction SilentlyContinue | Out-Null
+            }
+
+            if ($scopes.Count -gt 0 -and $profile -in @('VMAdmin', 'SelfServiceUser', 'TenantAdmin')) {
+              foreach ($scopePath in $scopes) {
+                $hg = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq $scopePath } | Select-Object -First 1
+                if ($hg) {
+                  Set-SCUserRole -UserRole $newRole -AddScope $hg -ErrorAction SilentlyContinue | Out-Null
+                }
+                else {
+                  Write-Output "INFO: [user_role] Host group '$scopePath' introuvable pour scope '$name', ignoré"
+                }
+              }
+            }
+
+            Emit-Result -Scope 'user_role' -Message "CREATED $name (profile=$profile)" -Changed:$true
+          }
+        }
+      }
+  register: scvmm_access_result
+  changed_when: >-
+    scvmm_access_result.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

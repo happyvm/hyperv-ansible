@@ -1,0 +1,23 @@
+---
+# Stockage SCVMM : library shares et classifications de stockage.
+scvmm_storage:
+  check_only: false
+
+  library_shares:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "LIB-PARIS-ISO"
+    #   path: "\\\\filesrv01\\scvmm-lib-paris"
+    #   description: "Bibliothèque ISO Paris"
+
+  storage_classifications:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "GOLD"
+    #   description: "Stockage SSD haute performance"
+    # - name: "SILVER"
+    #   description: "Stockage SAS standard"
+    # - name: "BRONZE"
+    #   description: "Stockage SATA archivage"

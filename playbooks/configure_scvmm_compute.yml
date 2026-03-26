@@ -1,0 +1,12 @@
+---
+# Ressources de calcul SCVMM : clouds et profils matériels.
+# Prérequis : configure_scvmm_infra.yml (host groups pour les clouds).
+
+- name: Configurer les ressources de calcul SCVMM
+  hosts: scvmm_servers
+  gather_facts: false
+  tags: [scvmm, scvmm_compute]
+  tasks:
+    - name: Appliquer la configuration calcul SCVMM
+      ansible.builtin.include_role:
+        name: scvmm_compute
