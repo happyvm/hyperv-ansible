@@ -59,11 +59,15 @@ Le fichier `inventories/multisite/group_vars/all.yml` définit:
 - `live_migration`: paramètres globaux par défaut ;
 - `sites`: liste des sites et clusters ;
 - `scvmm`: informations de connexion au management server ;
-- `scvmm_live_migration`: options de sécurité/simulation côté SCVMM.
+- `scvmm_live_migration`: options de sécurité/simulation/compatibilité côté SCVMM.
 
 Exemple de logique:
 - `live_migration` global = baseline.
 - `sites.<site>.clusters[].live_migration` = surcharge locale.
+
+Options SCVMM utiles:
+- `scvmm_live_migration.manage_storage_migrations`: active la gestion du maximum de migrations de stockage quand supporté ;
+- `scvmm_live_migration.manage_host_settings`: active l'application via SCVMM des options auth/perf/réseaux sur les hôtes du cluster.
 
 ---
 
@@ -113,8 +117,11 @@ Le rôle `hyperv_livemigration`:
 Le rôle `scvmm_livemigration`:
 - parcourt les clusters déclarés dans la structure multisite ;
 - compare l'état courant au `MigrationMaximum` attendu ;
+- peut aussi gérer `StorageMigrationMaximum` (selon support de la version SCVMM) ;
+- peut propager les réglages d'authentification/performance/réseaux Live Migration vers les hôtes via SCVMM ;
 - supporte un mode simulation (`--check` ou `scvmm_live_migration.check_only`) ;
-- peut refuser l'application si le cluster n'est pas dans le `scvmm_host_group` attendu (`enforce_host_group: true`).
+- peut refuser l'application si le cluster n'est pas dans le `scvmm_host_group` attendu (`enforce_host_group: true`) ;
+- détecte dynamiquement les propriétés/paramètres SCVMM disponibles pour rester compatible entre versions.
 
 > ⚠️ Les cmdlets/paramètres SCVMM peuvent varier selon la version.
 > Adaptez précisément `roles/scvmm_livemigration/tasks/main.yml` à votre version SCVMM.

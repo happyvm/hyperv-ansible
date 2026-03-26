@@ -19,6 +19,8 @@ scvmm:
 scvmm_live_migration:
   enforce_host_group: true
   check_only: false
+  manage_storage_migrations: true
+  manage_host_settings: true
 
 sites:
   paris:

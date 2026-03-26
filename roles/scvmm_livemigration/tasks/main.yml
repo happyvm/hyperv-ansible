@@ -3,6 +3,32 @@
   ansible.builtin.set_fact:
     multisite_clusters: "{{ sites | dict2items | map(attribute='value.clusters') | flatten }}"
 
+- name: Valider les paramètres SCVMM par cluster
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - (item.name | string | length) > 0
+      - (live_migration.max_simultaneous_migrations | int) > 0
+      - (live_migration.max_simultaneous_storage_migrations | int) > 0
+      - (live_migration.auth_protocol | string) in ['CredSSP', 'Kerberos']
+      - (live_migration.performance_option | string) in ['TCPIP', 'Compression', 'SMB']
+      - >-
+        (item.live_migration.max_simultaneous_migrations is not defined)
+        or ((item.live_migration.max_simultaneous_migrations | int) > 0)
+      - >-
+        (item.live_migration.max_simultaneous_storage_migrations is not defined)
+        or ((item.live_migration.max_simultaneous_storage_migrations | int) > 0)
+      - >-
+        (item.live_migration.auth_protocol is not defined)
+        or ((item.live_migration.auth_protocol | string) in ['CredSSP', 'Kerberos'])
+      - >-
+        (item.live_migration.performance_option is not defined)
+        or ((item.live_migration.performance_option | string) in ['TCPIP', 'Compression', 'SMB'])
+    fail_msg: "Variables SCVMM invalides pour le cluster {{ item.name | default('inconnu') }}"
+  loop: "{{ multisite_clusters }}"
+  loop_control:
+    label: "{{ item.name | default('inconnu') }}"
+
 - name: Appliquer la Live Migration par cluster via SCVMM
   ansible.windows.win_powershell:
     script: |
@@ -20,32 +46,221 @@
       if ([string]::IsNullOrWhiteSpace($expectedHostGroup)) {
         throw "Cluster {{ item.name }} sans scvmm_host_group alors que enforce_host_group=true"
       }
-      if ($cluster.HostGroupPath -ne $expectedHostGroup) {
-        throw "Cluster {{ item.name }} trouvé dans le host group '$($cluster.HostGroupPath)' au lieu de '$expectedHostGroup'"
+
+      $clusterHostGroupPath = [string]$cluster.HostGroupPath
+      if ($clusterHostGroupPath.ToLowerInvariant() -ne $expectedHostGroup.ToLowerInvariant()) {
+        throw "Cluster {{ item.name }} trouvé dans le host group '$clusterHostGroupPath' au lieu de '$expectedHostGroup'"
       }
       {% endif %}
 
-      $targetMax = [int]{{ (live_migration.max_simultaneous_migrations | int) if (item.live_migration is not defined) else (item.live_migration.max_simultaneous_migrations | int) }}
-      $currentMax = [int]$cluster.MigrationMaximum
+      $targetVmMax = [int]{{ (live_migration.max_simultaneous_migrations | int) if (item.live_migration is not defined or item.live_migration.max_simultaneous_migrations is not defined) else (item.live_migration.max_simultaneous_migrations | int) }}
+      $targetStorageMax = [int]{{ (live_migration.max_simultaneous_storage_migrations | int) if (item.live_migration is not defined or item.live_migration.max_simultaneous_storage_migrations is not defined) else (item.live_migration.max_simultaneous_storage_migrations | int) }}
+      $manageStorage = [System.Convert]::ToBoolean("{{ scvmm_live_migration.manage_storage_migrations | bool }}")
 
-      if ($currentMax -eq $targetMax) {
+      $setCommand = Get-Command -Name Set-SCVMHostCluster
+      $availableParameters = $setCommand.Parameters.Keys
+
+      $changeSet = @{}
+      $changes = New-Object System.Collections.Generic.List[string]
+
+      $currentVmMax = [int]$cluster.MigrationMaximum
+      if ($currentVmMax -ne $targetVmMax) {
+        $changeSet['MigrationMaximum'] = $targetVmMax
+        $changes.Add("MigrationMaximum $currentVmMax -> $targetVmMax") | Out-Null
+      }
+
+      if ($manageStorage) {
+        $storageProperty = $null
+        foreach ($candidate in @('StorageMigrationMaximum', 'MigrationStorageMaximum')) {
+          if ($cluster.PSObject.Properties.Name -contains $candidate) {
+            $storageProperty = $candidate
+            break
+          }
+        }
+
+        $storageParameter = $null
+        foreach ($candidate in @('StorageMigrationMaximum', 'MigrationStorageMaximum')) {
+          if ($availableParameters -contains $candidate) {
+            $storageParameter = $candidate
+            break
+          }
+        }
+
+        if ($storageProperty -and $storageParameter) {
+          $currentStorageMax = [int]$cluster.$storageProperty
+          if ($currentStorageMax -ne $targetStorageMax) {
+            $changeSet[$storageParameter] = $targetStorageMax
+            $changes.Add("$storageParameter $currentStorageMax -> $targetStorageMax") | Out-Null
+          }
+        }
+        else {
+          Write-Output 'INFO: StorageMigrationMaximum non supporté par cette version SCVMM, ignoré'
+        }
+      }
+
+      if ($changes.Count -eq 0) {
         Write-Output 'UNCHANGED'
         return
       }
 
       if ({{ (ansible_check_mode or scvmm_live_migration.check_only) | ternary('$true', '$false') }}) {
-        Write-Output "WOULD_CHANGE: MigrationMaximum $currentMax -> $targetMax"
+        Write-Output ("WOULD_CHANGE: " + ($changes -join '; '))
         return
       }
 
-      Set-SCVMHostCluster -VMHostCluster $cluster -MigrationMaximum $targetMax | Out-Null
-      Write-Output "CHANGED: MigrationMaximum $currentMax -> $targetMax"
+      $params = @{ VMHostCluster = $cluster }
+      foreach ($key in $changeSet.Keys) {
+        $params[$key] = $changeSet[$key]
+      }
+
+      Set-SCVMHostCluster @params | Out-Null
+      Write-Output ("CHANGED: " + ($changes -join '; '))
   loop: "{{ multisite_clusters }}"
   loop_control:
     label: "{{ item.name }}"
   register: scvmm_lm
   changed_when: >-
     scvmm_lm.results
+    | map(attribute='output')
+    | map('join', ' ')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0
+
+- name: Appliquer la configuration Live Migration des hôtes via SCVMM
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
+
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+      $cluster = Get-SCVMHostCluster -VMMServer $server | Where-Object { $_.Name -eq "{{ item.name }}" }
+
+      if (-not $cluster) {
+        throw "Cluster {{ item.name }} introuvable dans SCVMM"
+      }
+
+      $manageHostSettings = [System.Convert]::ToBoolean("{{ scvmm_live_migration.manage_host_settings | bool }}")
+      if (-not $manageHostSettings) {
+        Write-Output 'UNCHANGED: manage_host_settings=false'
+        return
+      }
+
+      $targetAuth = "{{ (live_migration.auth_protocol) if (item.live_migration is not defined or item.live_migration.auth_protocol is not defined) else (item.live_migration.auth_protocol) }}"
+      $targetPerf = "{{ (live_migration.performance_option) if (item.live_migration is not defined or item.live_migration.performance_option is not defined) else (item.live_migration.performance_option) }}"
+      $targetUseAnyNetwork = [System.Convert]::ToBoolean("{{ (live_migration.use_any_network | bool) if (item.live_migration is not defined or item.live_migration.use_any_network is not defined) else (item.live_migration.use_any_network | bool) }}")
+      $targetNetworksRaw = "{{ ((live_migration.networks | default([])) if (item.live_migration is not defined or item.live_migration.networks is not defined) else (item.live_migration.networks | default([]))) | join(',') }}"
+      $targetNetworks = @($targetNetworksRaw.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+      $setCommand = Get-Command -Name Set-SCVMHost
+      $availableParameters = $setCommand.Parameters.Keys
+
+      function Get-FirstMatchingName {
+        param(
+          [Parameter(Mandatory=$true)] [object]$Source,
+          [Parameter(Mandatory=$true)] [string[]]$Candidates,
+          [Parameter(Mandatory=$true)] [bool]$IsParameter
+        )
+
+        foreach ($candidate in $Candidates) {
+          if ($IsParameter) {
+            if ($Source -contains $candidate) { return $candidate }
+          }
+          else {
+            if ($Source.PSObject.Properties.Name -contains $candidate) { return $candidate }
+          }
+        }
+
+        return $null
+      }
+
+      $hosts = @(Get-SCVMHost -VMMServer $server | Where-Object {
+        $_.VMHostCluster -and $_.VMHostCluster.Name -eq $cluster.Name
+      })
+
+      if ($hosts.Count -eq 0) {
+        Write-Output 'UNCHANGED: aucun hôte trouvé dans le cluster'
+        return
+      }
+
+      $globalChanged = $false
+      foreach ($vmHost in $hosts) {
+        $changeSet = @{ VMHost = $vmHost }
+        $changes = New-Object System.Collections.Generic.List[string]
+
+        $authProperty = Get-FirstMatchingName -Source $vmHost -Candidates @('MigrationAuthenticationType', 'VirtualMachineMigrationAuthenticationType') -IsParameter:$false
+        $authParameter = Get-FirstMatchingName -Source $availableParameters -Candidates @('MigrationAuthenticationType', 'VirtualMachineMigrationAuthenticationType') -IsParameter:$true
+        if ($authProperty -and $authParameter) {
+          $currentAuth = [string]$vmHost.$authProperty
+          if ($currentAuth -ne $targetAuth) {
+            $changeSet[$authParameter] = $targetAuth
+            $changes.Add("$authParameter $currentAuth -> $targetAuth") | Out-Null
+          }
+        }
+
+        $perfProperty = Get-FirstMatchingName -Source $vmHost -Candidates @('MigrationPerformanceOption', 'VirtualMachineMigrationPerformanceOption') -IsParameter:$false
+        $perfParameter = Get-FirstMatchingName -Source $availableParameters -Candidates @('MigrationPerformanceOption', 'VirtualMachineMigrationPerformanceOption') -IsParameter:$true
+        if ($perfProperty -and $perfParameter) {
+          $currentPerf = [string]$vmHost.$perfProperty
+          if ($currentPerf -ne $targetPerf) {
+            $changeSet[$perfParameter] = $targetPerf
+            $changes.Add("$perfParameter $currentPerf -> $targetPerf") | Out-Null
+          }
+        }
+
+        $anyNetProperty = Get-FirstMatchingName -Source $vmHost -Candidates @('UseAnyNetworkForMigration', 'UseAnyMigrationSubnet') -IsParameter:$false
+        $anyNetParameter = Get-FirstMatchingName -Source $availableParameters -Candidates @('UseAnyNetworkForMigration', 'UseAnyMigrationSubnet') -IsParameter:$true
+        if ($anyNetProperty -and $anyNetParameter) {
+          $currentAny = [System.Convert]::ToBoolean($vmHost.$anyNetProperty)
+          if ($currentAny -ne $targetUseAnyNetwork) {
+            $changeSet[$anyNetParameter] = $targetUseAnyNetwork
+            $changes.Add("$anyNetParameter $currentAny -> $targetUseAnyNetwork") | Out-Null
+          }
+        }
+
+        if (-not $targetUseAnyNetwork) {
+          $netProperty = Get-FirstMatchingName -Source $vmHost -Candidates @('MigrationSubnet', 'VirtualMachineMigrationNetwork', 'MigrationNetworks') -IsParameter:$false
+          $netParameter = Get-FirstMatchingName -Source $availableParameters -Candidates @('MigrationSubnet', 'VirtualMachineMigrationNetwork', 'MigrationNetworks') -IsParameter:$true
+          if ($netProperty -and $netParameter) {
+            $currentNetworks = @()
+            foreach ($net in @($vmHost.$netProperty)) {
+              if ($null -ne $net) {
+                $currentNetworks += [string]$net
+              }
+            }
+
+            $currentSorted = @($currentNetworks | Sort-Object)
+            $targetSorted = @($targetNetworks | Sort-Object)
+            if (($currentSorted -join ',') -ne ($targetSorted -join ',')) {
+              $changeSet[$netParameter] = $targetNetworks
+              $changes.Add("$netParameter $($currentSorted -join ',') -> $($targetSorted -join ',')") | Out-Null
+            }
+          }
+        }
+
+        if ($changes.Count -eq 0) {
+          Write-Output ("UNCHANGED: " + $vmHost.Name)
+          continue
+        }
+
+        if ({{ (ansible_check_mode or scvmm_live_migration.check_only) | ternary('$true', '$false') }}) {
+          Write-Output ("WOULD_CHANGE: " + $vmHost.Name + ' => ' + ($changes -join '; '))
+          continue
+        }
+
+        Set-SCVMHost @changeSet | Out-Null
+        Write-Output ("CHANGED: " + $vmHost.Name + ' => ' + ($changes -join '; '))
+        $globalChanged = $true
+      }
+
+      if (-not $globalChanged) {
+        return
+      }
+  loop: "{{ multisite_clusters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: scvmm_host_lm
+  changed_when: >-
+    scvmm_host_lm.results
     | map(attribute='output')
     | map('join', ' ')
     | select('search', '^CHANGED:')
