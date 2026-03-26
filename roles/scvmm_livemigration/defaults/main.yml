@@ -3,3 +3,9 @@
 scvmm_live_migration:
   enforce_host_group: false
   check_only: false
+  # Lorsque true, configure aussi le maximum de migrations de stockage
+  # au niveau cluster SCVMM si le paramètre est supporté par la version.
+  manage_storage_migrations: true
+  # Lorsque true, applique les paramètres d'auth/perf/réseaux Live Migration
+  # sur les hôtes du cluster via SCVMM (si cmdlets/propriétés disponibles).
+  manage_host_settings: true
