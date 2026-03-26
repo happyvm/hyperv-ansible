@@ -1,7 +1,7 @@
 ---
 # Playbook dédié à la configuration hôte Hyper-V (hors Live Migration).
-# Couvre : chemins de stockage, NUMA, Enhanced Session Mode, resource metering,
-#          et virtual switches.
+# Couvre : chemins de stockage, NUMA, Enhanced Session Mode, resource metering.
+# Les virtual switches sont gérés par SCVMM via scvmm_core_config.virtual_switches.
 
 - name: Configurer les paramètres hôte Hyper-V
   hosts: hyperv_nodes
@@ -18,18 +18,7 @@
           - hyperv_host_config.resource_metering is mapping
         fail_msg: "Structure hyperv_host_config invalide pour {{ inventory_hostname }}"
 
-    - name: Valider les paramètres hyperv_vswitch
-      ansible.builtin.assert:
-        that:
-          - hyperv_vswitch is mapping
-          - hyperv_vswitch.items is sequence
-        fail_msg: "Structure hyperv_vswitch invalide pour {{ inventory_hostname }}"
-
   tasks:
     - name: Appliquer la configuration hôte Hyper-V
       ansible.builtin.include_role:
         name: hyperv_host_config
-
-    - name: Gérer les virtual switches Hyper-V
-      ansible.builtin.include_role:
-        name: hyperv_vswitch

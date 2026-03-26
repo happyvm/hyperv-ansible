@@ -70,23 +70,6 @@ hyperv_host_config:
     enabled: false
     enable: false
 
-# ---------------------------------------------------------------------------
-# Virtual switches Hyper-V.
-# Désactivé par défaut ; activer et décrire les switches dans host_vars.
-# ---------------------------------------------------------------------------
-hyperv_vswitch:
-  check_only: false
-  enabled: false
-  items: []
-  # Exemple :
-  # items:
-  #   - name: vSwitch-Prod
-  #     type: External
-  #     net_adapter_name: "Ethernet 1"
-  #     allow_management_os: true
-  #     notes: Switch de production
-  #   - name: vSwitch-Mgmt
-  #     type: Internal
 
 # ---------------------------------------------------------------------------
 # Objets SCVMM hors Live Migration (désactivés par défaut).
@@ -162,6 +145,20 @@ scvmm_core_config:
         uplink_port_profile: PP-UPLINK-PROD
         minimum_bandwidth_mode: Default
         enable_sriov: false
+
+  # Déploiement des virtual switches sur les hôtes via SCVMM.
+  # Prérequis : logical_switch et uplink_port_profile déjà créés ci-dessus.
+  virtual_switches:
+    enabled: false
+    items:
+      - logical_switch: LS-PROD
+        uplink_port_profile: PP-UPLINK-PROD
+        net_adapter_name: "Ethernet 1"
+        host_group: Paris/Production
+      - logical_switch: LS-PROD
+        uplink_port_profile: PP-UPLINK-PROD
+        net_adapter_name: "Ethernet 1"
+        host_group: Lyon/Production
 
   hardware_profiles:
     enabled: false

@@ -94,6 +94,21 @@ scvmm_core_config:
     #   dynamic_memory_max_mb: 8192
     #   dynamic_memory_buffer_pct: 20  # % de mémoire tampon (5-2000)
 
+  # Déploiement des virtual switches sur les hôtes Hyper-V via SCVMM.
+  # Chaque entrée associe un logical switch (défini ci-dessus) à une carte
+  # réseau physique des hôtes d'un host group ou cluster cible.
+  # SCVMM crée le vSwitch correspondant sur chaque hôte concerné.
+  virtual_switches:
+    enabled: false
+    items: []
+    # Exemple :
+    # - logical_switch: "LS-PROD"          # Logical switch SCVMM existant
+    #   uplink_port_profile: "PP-UPLINK-PROD"
+    #   net_adapter_name: "Ethernet 1"     # Nom de la carte physique sur les hôtes
+    #   # Ciblage : host_group OU cluster (au moins un obligatoire)
+    #   host_group: "Paris/Production"     # Tous les hôtes du groupe
+    #   # cluster: "CLU-PARIS-HV"          # Ou un cluster précis
+
   # Rôles utilisateur SCVMM.
   user_roles:
     enabled: false

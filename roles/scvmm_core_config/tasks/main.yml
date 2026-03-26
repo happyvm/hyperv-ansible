@@ -15,6 +15,7 @@
       - scvmm_core_config.port_profiles is mapping
       - scvmm_core_config.logical_switches is mapping
       - scvmm_core_config.hardware_profiles is mapping
+      - scvmm_core_config.virtual_switches is mapping
       - scvmm_core_config.user_roles is mapping
 
 - name: Configurer SCVMM (hors Live Migration)
@@ -506,6 +507,119 @@
 
             New-SCHardwareProfile @params | Out-Null
             Emit-Result -Scope 'hardware_profile' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Virtual Switches (déploiement via SCVMM)
+      # -------------------------
+      $vsEnabled = [System.Convert]::ToBoolean("{{ scvmm_core_config.virtual_switches.enabled | bool }}")
+      if ($vsEnabled) {
+        $requiredCmds = @('Get-SCVMHost','Get-SCVMHostNetworkAdapter','Get-SCLogicalSwitch',
+                          'Get-SCUplinkPortProfileSet','Set-SCVMHostNetworkAdapter','Install-SCVirtualSwitch',
+                          'Get-SCVirtualSwitch')
+        $missingCmd = $requiredCmds | Where-Object { -not (Has-Command -Name $_) }
+        if ($missingCmd) {
+          Write-Output ("INFO: Cmdlets virtual switch indisponibles ($($missingCmd -join ',')), bloc ignoré")
+        }
+        else {
+          $vsEntries = ConvertFrom-Json -InputObject @'
+{{ scvmm_core_config.virtual_switches.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($vsEntries)) {
+            $logicalSwitchName   = [string]$entry.logical_switch
+            $uplinkPPName        = [string]$entry.uplink_port_profile
+            $adapterName         = [string]$entry.net_adapter_name
+            $targetHostGroup     = [string]$entry.host_group
+            $targetCluster       = [string]$entry.cluster
+
+            if ([string]::IsNullOrWhiteSpace($logicalSwitchName)) {
+              throw 'virtual_switches.items[].logical_switch est obligatoire'
+            }
+            if ([string]::IsNullOrWhiteSpace($adapterName)) {
+              throw 'virtual_switches.items[].net_adapter_name est obligatoire'
+            }
+            if ([string]::IsNullOrWhiteSpace($targetHostGroup) -and [string]::IsNullOrWhiteSpace($targetCluster)) {
+              throw "virtual_switches.items[].host_group ou .cluster est obligatoire pour '$logicalSwitchName'"
+            }
+
+            $logicalSwitch = Get-SCLogicalSwitch -VMMServer $server | Where-Object { $_.Name -eq $logicalSwitchName } | Select-Object -First 1
+            if (-not $logicalSwitch) {
+              throw "Logical switch '$logicalSwitchName' introuvable dans SCVMM"
+            }
+
+            # Résolution des hôtes cibles
+            $targetHosts = @()
+            if (-not [string]::IsNullOrWhiteSpace($targetCluster)) {
+              $cl = Get-SCVMHostCluster -VMMServer $server | Where-Object { $_.Name -eq $targetCluster } | Select-Object -First 1
+              if (-not $cl) { throw "Cluster '$targetCluster' introuvable dans SCVMM" }
+              $targetHosts = @(Get-SCVMHost -VMMServer $server | Where-Object { $_.VMHostCluster -and $_.VMHostCluster.Name -eq $cl.Name })
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($targetHostGroup)) {
+              $hg = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq $targetHostGroup } | Select-Object -First 1
+              if (-not $hg) { throw "Host group '$targetHostGroup' introuvable dans SCVMM" }
+              $targetHosts = @(Get-SCVMHost -VMMServer $server | Where-Object { [string]$_.VMHostGroup -eq $targetHostGroup -or [string]$_.HostGroupPath -like "$targetHostGroup*" })
+            }
+
+            if ($targetHosts.Count -eq 0) {
+              Write-Output "INFO: [virtual_switch] Aucun hôte trouvé pour '$logicalSwitchName', bloc ignoré"
+              continue
+            }
+
+            # Résolution du uplink port profile set sur le logical switch
+            $uplinkPPSet = $null
+            if (-not [string]::IsNullOrWhiteSpace($uplinkPPName)) {
+              $uplinkPPSet = Get-SCUplinkPortProfileSet -VMMServer $server | Where-Object {
+                $_.LogicalSwitch.Name -eq $logicalSwitchName -and $_.Name -eq $uplinkPPName
+              } | Select-Object -First 1
+
+              if (-not $uplinkPPSet) {
+                # Fallback : premier uplink port profile set du logical switch
+                $uplinkPPSet = Get-SCUplinkPortProfileSet -VMMServer $server | Where-Object {
+                  $_.LogicalSwitch.Name -eq $logicalSwitchName
+                } | Select-Object -First 1
+              }
+            }
+            else {
+              $uplinkPPSet = Get-SCUplinkPortProfileSet -VMMServer $server | Where-Object {
+                $_.LogicalSwitch.Name -eq $logicalSwitchName
+              } | Select-Object -First 1
+            }
+
+            foreach ($vmHost in $targetHosts) {
+              # Vérifier si le vSwitch SCVMM existe déjà sur cet hôte
+              $existingVS = Get-SCVirtualSwitch -VMMServer $server | Where-Object {
+                $_.VMHost.Name -eq $vmHost.Name -and $_.LogicalSwitch -and $_.LogicalSwitch.Name -eq $logicalSwitchName
+              } | Select-Object -First 1
+
+              if ($existingVS) {
+                Emit-Result -Scope 'virtual_switch' -Message "EXISTS $logicalSwitchName sur $($vmHost.Name)" -Changed:$false
+                continue
+              }
+
+              # Récupérer l'adaptateur réseau physique
+              $nic = Get-SCVMHostNetworkAdapter -VMHost $vmHost | Where-Object { $_.ConnectionName -eq $adapterName -or $_.Name -eq $adapterName } | Select-Object -First 1
+              if (-not $nic) {
+                Write-Output "INFO: [virtual_switch] Carte '$adapterName' introuvable sur $($vmHost.Name), hôte ignoré"
+                continue
+              }
+
+              if ($isCheckMode) {
+                Emit-Result -Scope 'virtual_switch' -Message "WOULD_DEPLOY $logicalSwitchName sur $($vmHost.Name) (adapter=$adapterName)" -Changed:$true
+                continue
+              }
+
+              # Associer l'uplink port profile à la carte
+              if ($uplinkPPSet) {
+                Set-SCVMHostNetworkAdapter -VMHostNetworkAdapter $nic -UplinkPortProfileSet $uplinkPPSet | Out-Null
+              }
+
+              # Déployer le virtual switch via SCVMM
+              Install-SCVirtualSwitch -VMHost $vmHost -LogicalSwitch $logicalSwitch -VMHostNetworkAdapters @($nic) | Out-Null
+              Emit-Result -Scope 'virtual_switch' -Message "DEPLOYED $logicalSwitchName sur $($vmHost.Name)" -Changed:$true
+            }
           }
         }
       }
