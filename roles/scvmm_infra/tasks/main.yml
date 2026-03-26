@@ -1,0 +1,90 @@
+---
+- name: Valider la structure de scvmm_infra
+  ansible.builtin.assert:
+    that:
+      - scvmm.management_server is defined
+      - (scvmm.management_server | string | length) > 0
+      - (scvmm.port | int) > 0
+      - scvmm_infra is mapping
+      - scvmm_infra.host_groups is mapping
+
+- name: Configurer l'infrastructure SCVMM (host groups)
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
+
+      $isCheckMode = {{ (ansible_check_mode or scvmm_infra.check_only) | ternary('$true', '$false') }}
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+
+      function Has-Command {
+        param([Parameter(Mandatory=$true)][string]$Name)
+        return $null -ne (Get-Command -Name $Name -ErrorAction SilentlyContinue)
+      }
+
+      function Emit-Result {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+        if ($Changed) { Write-Output ("CHANGED: [$Scope] $Message") }
+        else           { Write-Output ("UNCHANGED: [$Scope] $Message") }
+      }
+
+      # -------------------------
+      # Host Groups
+      # -------------------------
+      $hostGroupsEnabled = [System.Convert]::ToBoolean("{{ scvmm_infra.host_groups.enabled | bool }}")
+      if ($hostGroupsEnabled) {
+        if (-not (Has-Command -Name 'Get-SCVMHostGroup') -or -not (Has-Command -Name 'New-SCVMHostGroup')) {
+          Write-Output 'INFO: Cmdlets host group indisponibles, bloc ignoré'
+        }
+        else {
+          $hostGroups = ConvertFrom-Json -InputObject @'
+{{ scvmm_infra.host_groups.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($hostGroups)) {
+            $path = [string]$entry.path
+            if ([string]::IsNullOrWhiteSpace($path)) {
+              throw 'host_groups.items[].path est obligatoire'
+            }
+
+            $segments = @($path.Split('/') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($segments.Count -eq 0) {
+              throw "Path host group invalide: '$path'"
+            }
+
+            $parent = Get-SCVMHostGroup -VMMServer $server | Where-Object { $_.ParentHostGroup -eq $null } | Select-Object -First 1
+            if (-not $parent) {
+              throw 'Host group racine introuvable dans SCVMM'
+            }
+
+            $currentPath = ''
+            foreach ($segment in $segments) {
+              $currentPath = if ([string]::IsNullOrEmpty($currentPath)) { $segment } else { "$currentPath/$segment" }
+
+              $existing = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq $currentPath } | Select-Object -First 1
+              if ($existing) {
+                $parent = $existing
+                continue
+              }
+
+              if ($isCheckMode) {
+                Emit-Result -Scope 'host_group' -Message "WOULD_CREATE $currentPath" -Changed:$true
+                break
+              }
+
+              $parent = New-SCVMHostGroup -VMMServer $server -Name $segment -ParentVMHostGroup $parent
+              Emit-Result -Scope 'host_group' -Message "CREATED $currentPath" -Changed:$true
+            }
+          }
+        }
+      }
+  register: scvmm_infra_result
+  changed_when: >-
+    scvmm_infra_result.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

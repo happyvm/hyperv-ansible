@@ -1,0 +1,28 @@
+---
+# Ressources de calcul SCVMM : clouds et profils matériels.
+# Prérequis : scvmm_infra (host groups).
+scvmm_compute:
+  check_only: false
+
+  clouds:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "CLOUD-PROD-FR"
+    #   vm_host_groups:
+    #     - "Paris/Production"
+    #     - "Lyon/Production"
+    #   description: "Cloud production France"
+
+  hardware_profiles:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "HW-2vCPU-4GB"
+    #   description: "2 vCPU, 4 Go RAM dynamique"
+    #   cpu_count: 2
+    #   memory_mb: 4096
+    #   dynamic_memory_enabled: true
+    #   dynamic_memory_min_mb: 512
+    #   dynamic_memory_max_mb: 8192
+    #   dynamic_memory_buffer_pct: 20

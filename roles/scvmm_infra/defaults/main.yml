@@ -1,0 +1,12 @@
+---
+# Infrastructure de base SCVMM : host groups.
+# Doit être appliqué en premier (les autres rôles dépendent des host groups).
+scvmm_infra:
+  check_only: false
+
+  host_groups:
+    enabled: false
+    items: []
+    # Exemple:
+    # - path: "Paris/Production"
+    # - path: "Lyon/Production"

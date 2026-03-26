@@ -1,0 +1,55 @@
+---
+# Réseau SCVMM : logical networks, VM networks, port profiles,
+# logical switches et déploiement des virtual switches.
+# Prérequis : scvmm_infra (host groups).
+scvmm_networking:
+  check_only: false
+
+  logical_networks:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "LN-PROD"
+    #   description: "Réseau logique de production"
+
+  vm_networks:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "VMNET-PROD"
+    #   logical_network: "LN-PROD"
+
+  port_profiles:
+    enabled: false
+    items: []
+    # Exemple profil uplink :
+    # - name: "PP-UPLINK-PROD"
+    #   type: Uplink           # Uplink | VirtualNetwork
+    #   description: "Profil uplink production"
+    #   load_balancing_algorithm: HyperVPort
+    #   teaming_mode: SwitchIndependent
+    #
+    # Exemple profil réseau virtuel :
+    # - name: "PP-VNET-PROD"
+    #   type: VirtualNetwork
+    #   description: "Profil réseau VM production"
+
+  logical_switches:
+    enabled: false
+    items: []
+    # Exemple:
+    # - name: "LS-PROD"
+    #   description: "Logical switch production"
+    #   uplink_port_profile: "PP-UPLINK-PROD"
+    #   minimum_bandwidth_mode: Default  # Default | Weight | Absolute | None
+    #   enable_sriov: false
+
+  virtual_switches:
+    enabled: false
+    items: []
+    # Exemple:
+    # - logical_switch: "LS-PROD"
+    #   uplink_port_profile: "PP-UPLINK-PROD"
+    #   net_adapter_name: "Ethernet 1"
+    #   host_group: "Paris/Production"
+    #   # cluster: "CLU-PARIS-HV"   # alternative à host_group

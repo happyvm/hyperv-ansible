@@ -1,0 +1,148 @@
+---
+- name: Valider la structure de scvmm_compute
+  ansible.builtin.assert:
+    that:
+      - scvmm.management_server is defined
+      - (scvmm.management_server | string | length) > 0
+      - (scvmm.port | int) > 0
+      - scvmm_compute is mapping
+      - scvmm_compute.clouds is mapping
+      - scvmm_compute.hardware_profiles is mapping
+
+- name: Configurer les ressources de calcul SCVMM
+  ansible.windows.win_powershell:
+    script: |
+      Import-Module VirtualMachineManager
+
+      $isCheckMode = {{ (ansible_check_mode or scvmm_compute.check_only) | ternary('$true', '$false') }}
+      $server = Get-SCVMMServer -ComputerName "{{ scvmm.management_server }}" -TCPPort {{ scvmm.port }}
+
+      function Has-Command {
+        param([Parameter(Mandatory=$true)][string]$Name)
+        return $null -ne (Get-Command -Name $Name -ErrorAction SilentlyContinue)
+      }
+
+      function Emit-Result {
+        param(
+          [Parameter(Mandatory=$true)][string]$Scope,
+          [Parameter(Mandatory=$true)][string]$Message,
+          [Parameter(Mandatory=$true)][bool]$Changed
+        )
+        if ($Changed) { Write-Output ("CHANGED: [$Scope] $Message") }
+        else           { Write-Output ("UNCHANGED: [$Scope] $Message") }
+      }
+
+      # -------------------------
+      # Clouds
+      # -------------------------
+      $cloudsEnabled = [System.Convert]::ToBoolean("{{ scvmm_compute.clouds.enabled | bool }}")
+      if ($cloudsEnabled) {
+        if (-not (Has-Command -Name 'Get-SCCloud') -or -not (Has-Command -Name 'New-SCCloud')) {
+          Write-Output 'INFO: Cmdlets cloud indisponibles, bloc ignoré'
+        }
+        else {
+          $clouds = ConvertFrom-Json -InputObject @'
+{{ scvmm_compute.clouds.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($clouds)) {
+            $name           = [string]$entry.name
+            $description    = [string]$entry.description
+            $hostGroupPaths = @($entry.vm_host_groups)
+
+            if ([string]::IsNullOrWhiteSpace($name) -or $hostGroupPaths.Count -eq 0) {
+              throw 'clouds.items[].name et .vm_host_groups[] sont obligatoires'
+            }
+
+            $existing = Get-SCCloud -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'cloud' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            $resolvedGroups = @()
+            foreach ($path in $hostGroupPaths) {
+              $group = Get-SCVMHostGroup -VMMServer $server | Where-Object { [string]$_.Path -eq [string]$path } | Select-Object -First 1
+              if (-not $group) { throw "VMHostGroup '$path' introuvable pour cloud '$name'" }
+              $resolvedGroups += $group
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'cloud' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name; VMHostGroup = $resolvedGroups }
+            if (-not [string]::IsNullOrWhiteSpace($description)) { $params['Description'] = $description }
+
+            New-SCCloud @params | Out-Null
+            Emit-Result -Scope 'cloud' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+
+      # -------------------------
+      # Hardware Profiles
+      # -------------------------
+      $hwEnabled = [System.Convert]::ToBoolean("{{ scvmm_compute.hardware_profiles.enabled | bool }}")
+      if ($hwEnabled) {
+        if (-not (Has-Command -Name 'Get-SCHardwareProfile') -or -not (Has-Command -Name 'New-SCHardwareProfile')) {
+          Write-Output 'INFO: Cmdlets hardware profile indisponibles, bloc ignoré'
+        }
+        else {
+          $hardwareProfiles = ConvertFrom-Json -InputObject @'
+{{ scvmm_compute.hardware_profiles.items | default([]) | to_json }}
+'@
+
+          foreach ($entry in @($hardwareProfiles)) {
+            $name        = [string]$entry.name
+            $description = [string]$entry.description
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+              throw 'hardware_profiles.items[].name est obligatoire'
+            }
+
+            $existing = Get-SCHardwareProfile -VMMServer $server | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($existing) {
+              Emit-Result -Scope 'hardware_profile' -Message "EXISTS $name" -Changed:$false
+              continue
+            }
+
+            if ($isCheckMode) {
+              Emit-Result -Scope 'hardware_profile' -Message "WOULD_CREATE $name" -Changed:$true
+              continue
+            }
+
+            $params = @{ VMMServer = $server; Name = $name }
+            if (-not [string]::IsNullOrWhiteSpace($description)) { $params['Description'] = $description }
+
+            $cpuCount = if ($null -ne $entry.cpu_count) { [int]$entry.cpu_count } else { 0 }
+            if ($cpuCount -gt 0) { $params['CPUCount'] = $cpuCount }
+
+            $memMb = if ($null -ne $entry.memory_mb) { [int]$entry.memory_mb } else { 0 }
+            if ($memMb -gt 0) { $params['MemoryMB'] = $memMb }
+
+            $dynMem = if ($null -ne $entry.dynamic_memory_enabled) { [System.Convert]::ToBoolean([string]$entry.dynamic_memory_enabled) } else { $false }
+            $params['DynamicMemoryEnabled'] = $dynMem
+
+            if ($dynMem) {
+              $dynMin = if ($null -ne $entry.dynamic_memory_min_mb)     { [int]$entry.dynamic_memory_min_mb     } else { 0 }
+              $dynMax = if ($null -ne $entry.dynamic_memory_max_mb)     { [int]$entry.dynamic_memory_max_mb     } else { 0 }
+              $dynBuf = if ($null -ne $entry.dynamic_memory_buffer_pct) { [int]$entry.dynamic_memory_buffer_pct } else { 0 }
+              if ($dynMin -gt 0) { $params['DynamicMemoryMinimumMB']     = $dynMin }
+              if ($dynMax -gt 0) { $params['DynamicMemoryMaximumMB']     = $dynMax }
+              if ($dynBuf -gt 0) { $params['DynamicMemoryBufferPercent'] = $dynBuf }
+            }
+
+            New-SCHardwareProfile @params | Out-Null
+            Emit-Result -Scope 'hardware_profile' -Message "CREATED $name" -Changed:$true
+          }
+        }
+      }
+  register: scvmm_compute_result
+  changed_when: >-
+    scvmm_compute_result.output
+    | map('string')
+    | select('search', '^CHANGED:')
+    | list
+    | length > 0

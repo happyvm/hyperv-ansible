@@ -47,7 +47,6 @@ sites:
 
 # ---------------------------------------------------------------------------
 # Configuration hôte Hyper-V (hors Live Migration).
-# Désactivée par défaut ; activer les blocs souhaités dans host_vars ou ici.
 # ---------------------------------------------------------------------------
 hyperv_host_config:
   check_only: false
@@ -70,11 +69,11 @@ hyperv_host_config:
     enabled: false
     enable: false
 
-
 # ---------------------------------------------------------------------------
-# Objets SCVMM hors Live Migration (désactivés par défaut).
+# Infrastructure SCVMM : host groups.
+# À configurer en premier (prérequis des autres domaines SCVMM).
 # ---------------------------------------------------------------------------
-scvmm_core_config:
+scvmm_infra:
   check_only: false
 
   host_groups:
@@ -83,12 +82,12 @@ scvmm_core_config:
       - path: Paris/Production
       - path: Lyon/Production
 
-  library_shares:
-    enabled: false
-    items:
-      - name: LIB-PARIS-ISO
-        path: \\\\filesrv01\\scvmm-lib-paris
-        description: Bibliothèque ISO Paris
+# ---------------------------------------------------------------------------
+# Réseau SCVMM : logical networks, VM networks, port profiles,
+# logical switches, virtual switches.
+# ---------------------------------------------------------------------------
+scvmm_networking:
+  check_only: false
 
   logical_networks:
     enabled: false
@@ -105,25 +104,6 @@ scvmm_core_config:
         logical_network: LN-PROD
       - name: VMNET-MGMT
         logical_network: LN-MGMT
-
-  clouds:
-    enabled: false
-    items:
-      - name: CLOUD-PROD-FR
-        vm_host_groups:
-          - Paris/Production
-          - Lyon/Production
-        description: Cloud production France
-
-  storage_classifications:
-    enabled: false
-    items:
-      - name: GOLD
-        description: Stockage SSD haute performance
-      - name: SILVER
-        description: Stockage SAS standard
-      - name: BRONZE
-        description: Stockage SATA archivage
 
   port_profiles:
     enabled: false
@@ -146,8 +126,6 @@ scvmm_core_config:
         minimum_bandwidth_mode: Default
         enable_sriov: false
 
-  # Déploiement des virtual switches sur les hôtes via SCVMM.
-  # Prérequis : logical_switch et uplink_port_profile déjà créés ci-dessus.
   virtual_switches:
     enabled: false
     items:
@@ -159,6 +137,44 @@ scvmm_core_config:
         uplink_port_profile: PP-UPLINK-PROD
         net_adapter_name: "Ethernet 1"
         host_group: Lyon/Production
+
+# ---------------------------------------------------------------------------
+# Stockage SCVMM : library shares et classifications.
+# ---------------------------------------------------------------------------
+scvmm_storage:
+  check_only: false
+
+  library_shares:
+    enabled: false
+    items:
+      - name: LIB-PARIS-ISO
+        path: \\\\filesrv01\\scvmm-lib-paris
+        description: Bibliothèque ISO Paris
+
+  storage_classifications:
+    enabled: false
+    items:
+      - name: GOLD
+        description: Stockage SSD haute performance
+      - name: SILVER
+        description: Stockage SAS standard
+      - name: BRONZE
+        description: Stockage SATA archivage
+
+# ---------------------------------------------------------------------------
+# Calcul SCVMM : clouds et profils matériels.
+# ---------------------------------------------------------------------------
+scvmm_compute:
+  check_only: false
+
+  clouds:
+    enabled: false
+    items:
+      - name: CLOUD-PROD-FR
+        vm_host_groups:
+          - Paris/Production
+          - Lyon/Production
+        description: Cloud production France
 
   hardware_profiles:
     enabled: false
@@ -176,6 +192,12 @@ scvmm_core_config:
         cpu_count: 4
         memory_mb: 8192
         dynamic_memory_enabled: false
+
+# ---------------------------------------------------------------------------
+# Accès SCVMM : rôles utilisateur.
+# ---------------------------------------------------------------------------
+scvmm_access:
+  check_only: false
 
   user_roles:
     enabled: false
